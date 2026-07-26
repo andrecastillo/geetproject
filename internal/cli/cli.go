@@ -38,6 +38,10 @@ Tickets:
   rm        KEY [--force]
   comment   KEY "body"
 
+Batch (for scripts and agents):
+  import    [--project P] [--dry-run]   create a tree of tickets from JSON on stdin
+  agent-guide                           print the full interface for an LLM
+
 Views:
   boards    [--project P]        views in a scope ('all' for cross-project)
   board     SCOPE VIEW           a view's columns and cards, e.g. geet board mai epics
@@ -118,6 +122,7 @@ func Run(args []string) error {
 		prefix     = fs.String("prefix", "", "ticket key prefix for a new project")
 		color      = fs.String("color", "", "project colour, e.g. '#60a5fa'")
 		force      = fs.Bool("force", false, "skip the confirmation prompt")
+		dryRun     = fs.Bool("dry-run", false, "validate and report, but write nothing")
 		labels     multiFlag
 	)
 	fs.Var(&labels, "label", "label name (repeatable)")
@@ -164,6 +169,11 @@ func Run(args []string) error {
 		default:
 			return fmt.Errorf("project takes 'new' or 'rm'")
 		}
+	case "import":
+		return c.importBatch(*project, *dryRun, *asJSON)
+	case "agent-guide":
+		fmt.Print(AgentGuide)
+		return nil
 	case "ls":
 		return c.list(*project, *ticketType, *status, *parent, *search, labels, *asJSON)
 	case "new":
@@ -609,5 +619,65 @@ func (c *client) removeProject(slug string, force bool) error {
 		return err
 	}
 	fmt.Printf("Deleted project %s and %d ticket(s)\n", slug, res.DeletedTickets)
+	return nil
+}
+
+// ---- batch import ----
+
+func (c *client) importBatch(project string, dryRun, asJSON bool) error {
+	if project == "" {
+		return fmt.Errorf("import needs a project: pass --project, or set GEET_PROJECT")
+	}
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return err
+	}
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return fmt.Errorf("no JSON on stdin; pipe a batch in, e.g. geet import --project %s < plan.json", project)
+	}
+
+	// Accept either {"tickets":[...]} or a bare [...] array, since a model asked
+	// for "a list of tickets" reasonably often produces the latter.
+	var body any
+	trimmed := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []store.ImportNode
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return fmt.Errorf("could not parse the batch as JSON: %w", err)
+		}
+		body = map[string]any{"tickets": arr}
+	} else {
+		var doc struct {
+			Tickets []store.ImportNode `json:"tickets"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return fmt.Errorf("could not parse the batch as JSON: %w", err)
+		}
+		body = doc
+	}
+
+	path := "/api/projects/" + project + "/import"
+	if dryRun {
+		path += "?dry_run=1"
+	}
+	var res struct {
+		DryRun  bool                 `json:"dry_run"`
+		Count   int                  `json:"count"`
+		Tickets []store.ImportResult `json:"tickets"`
+	}
+	if err := c.do("POST", path, body, &res); err != nil {
+		return err
+	}
+	if asJSON {
+		return dumpJSON(res)
+	}
+	for _, t := range res.Tickets {
+		fmt.Printf("%s%-9s %-8s %s\n", strings.Repeat("  ", t.Depth), t.Key, t.Type, t.Title)
+	}
+	if res.DryRun {
+		fmt.Printf("Dry run: would create %d ticket(s) in %s. Nothing was written.\n", res.Count, project)
+	} else {
+		fmt.Printf("Created %d ticket(s) in %s.\n", res.Count, project)
+	}
 	return nil
 }

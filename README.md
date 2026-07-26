@@ -113,6 +113,74 @@ read command. `edit` sends only the flags you passed, so changing a title never
 touches the description. Set `GEET_PROJECT` to stay in one project without
 repeating `--project`.
 
+### Batch import
+
+One call creates a whole tree, in a single transaction. This is the way to file
+a plan's worth of work at once, and the way an LLM should use geet.
+
+```bash
+geet import --project mai --dry-run < plan.json   # validate, write nothing
+geet import --project mai < plan.json
+```
+
+```json
+{
+  "tickets": [
+    { "type": "epic", "title": "Chat UI",
+      "description": "Front the knowledge graph with a chat interface.",
+      "labels": ["app"],
+      "children": [
+        { "title": "Flask /chat route", "status": "in-progress",
+          "children": [
+            { "title": "Stream tokens back to the client" },
+            { "title": "Wire up the tool schema" }
+          ]}
+      ]}
+  ]
+}
+```
+
+Only `title` is required. `type` is inferred from the shape — a child of an epic
+is a task, a child of a task is a sub-task, and a top-level entry is an epic if
+it has children. Unknown labels are created. A bare JSON array works in place of
+`{"tickets": [...]}`.
+
+The batch is **all-or-nothing**: it is validated in full first, and every problem
+is reported at once naming the offending node, so a failure leaves nothing
+behind and a retry cannot half-duplicate the tree.
+
+```
+$ geet import --project mai < broken.json
+geet: 3 problem(s) with the batch:
+  tickets[0]: title is required
+  tickets[1]: unknown type "story" (want epic, task or subtask)
+  tickets[2]: unknown status "doing"
+```
+
+### Driving geet from an LLM
+
+`geet agent-guide` prints the whole interface — model, batch format, commands —
+in a form meant to be read by a model. It ships inside the binary, so it cannot
+drift from the code.
+
+```bash
+geet agent-guide                       # read it
+geet agent-guide >> ~/CLAUDE.md        # or paste it into a system prompt
+```
+
+Install the CLI where every project can reach it:
+
+```bash
+go build -ldflags="-s -w" -o ~/.local/bin/geet ./cmd/geet
+```
+
+To keep the server up so the CLI always has something to talk to, either point
+`GEET_URL` at the container on your server, or run it locally as a user service:
+
+```bash
+systemctl --user enable --now geet     # see contrib/geet.service
+```
+
 ## Configuration
 
 | Variable | Default | Meaning |

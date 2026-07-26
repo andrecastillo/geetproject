@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -37,6 +38,9 @@ func New(st *store.Store, web http.Handler) http.Handler {
 	mux.HandleFunc("PATCH /api/projects/{project}", s.updateProject)
 	mux.HandleFunc("DELETE /api/projects/{project}", s.deleteProject)
 
+	// Batch creation: a whole tree of tickets in one transaction.
+	mux.HandleFunc("POST /api/projects/{project}/import", s.importTickets)
+
 	// Views live under a scope: a project slug, or "all" for cross-project.
 	// A view slug alone is no longer unique, so there is no flat /api/boards.
 	mux.HandleFunc("GET /api/projects/{project}/boards", s.listBoards)
@@ -57,6 +61,17 @@ func New(st *store.Store, web http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/tickets/{key}/comments", s.createComment)
 	mux.HandleFunc("PATCH /api/comments/{id}", s.updateComment)
 	mux.HandleFunc("DELETE /api/comments/{id}", s.deleteComment)
+
+	// An unmatched /api/ path must be a JSON 404, not the SPA. Without this it
+	// falls through to the catch-all below and a client asking for an endpoint
+	// this build doesn't have gets 200 and a page of HTML, which surfaces as a
+	// baffling "invalid character '<'" instead of "no such endpoint".
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": fmt.Sprintf("no such endpoint: %s %s (check the server version)",
+				r.Method, r.URL.Path),
+		})
+	})
 
 	if web != nil {
 		mux.Handle("/", web)
@@ -257,6 +272,32 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 	// Report what went with it, so a CLI can say so rather than guess.
 	writeJSON(w, http.StatusOK, map[string]int{"deleted_tickets": n})
+}
+
+// importTickets creates a whole tree of tickets in one transaction. With
+// ?dry_run=1 it validates and reports what it would create without writing.
+func (s *Server) importTickets(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tickets []store.ImportNode `json:"tickets"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	dryRun := r.URL.Query().Get("dry_run") != ""
+	created, err := s.st.Import(r.Context(), r.PathValue("project"), req.Tickets, dryRun)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	code := http.StatusCreated
+	if dryRun {
+		code = http.StatusOK
+	}
+	writeJSON(w, code, map[string]any{
+		"dry_run": dryRun,
+		"count":   len(created),
+		"tickets": created,
+	})
 }
 
 // ---- boards ----

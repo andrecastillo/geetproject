@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dv310p3r/geet/internal/store"
@@ -180,4 +181,81 @@ func columnBySlug(t *testing.T, view *store.BoardView, slug string) store.Column
 	}
 	t.Fatalf("board has no %q column", slug)
 	return store.Column{}
+}
+
+func TestImportEndpoint(t *testing.T) {
+	h := newTestServer(t)
+
+	batch := map[string]any{
+		"tickets": []map[string]any{{
+			"type": "epic", "title": "Chat UI", "labels": []string{"app"},
+			"children": []map[string]any{{
+				"title": "Flask route", "status": "in-progress",
+				"children": []map[string]any{{"title": "Stream tokens"}},
+			}},
+		}},
+	}
+
+	// A dry run reports without writing.
+	var preview struct {
+		DryRun  bool `json:"dry_run"`
+		Count   int  `json:"count"`
+		Tickets []struct {
+			Key, Type string
+			Depth     int
+		} `json:"tickets"`
+	}
+	rec := do(t, h, "POST", "/api/projects/demo/import?dry_run=1", batch, &preview)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dry run: want 200, got %d (%s)", rec.Code, rec.Body)
+	}
+	if !preview.DryRun || preview.Count != 3 {
+		t.Fatalf("want a 3-ticket dry run, got %+v", preview)
+	}
+	var after []store.Ticket
+	do(t, h, "GET", "/api/tickets", nil, &after)
+	if len(after) != 0 {
+		t.Fatalf("dry run wrote %d tickets", len(after))
+	}
+
+	// The real thing creates the tree.
+	rec = do(t, h, "POST", "/api/projects/demo/import", batch, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("import: want 201, got %d (%s)", rec.Code, rec.Body)
+	}
+	do(t, h, "GET", "/api/tickets", nil, &after)
+	if len(after) != 3 {
+		t.Fatalf("want 3 tickets created, got %d", len(after))
+	}
+
+	// A bad batch is a 400 and writes nothing.
+	rec = do(t, h, "POST", "/api/projects/demo/import",
+		map[string]any{"tickets": []map[string]any{{"title": ""}}}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad batch: want 400, got %d (%s)", rec.Code, rec.Body)
+	}
+	do(t, h, "GET", "/api/tickets", nil, &after)
+	if len(after) != 3 {
+		t.Errorf("a rejected batch changed the ticket count to %d", len(after))
+	}
+}
+
+// An /api path this build doesn't serve must be a JSON 404. If it falls through
+// to the SPA the client gets 200 and a page of HTML, and a version mismatch
+// looks like a JSON parse error instead of a missing endpoint.
+func TestUnknownAPIPathIsJSON404(t *testing.T) {
+	h := newTestServer(t)
+	rec := do(t, h, "GET", "/api/does-not-exist", nil, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d (%s)", rec.Code, rec.Body)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("want a JSON content type, got %q", ct)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Error == "" {
+		t.Errorf("want a JSON error body, got %q", rec.Body.String())
+	}
 }
