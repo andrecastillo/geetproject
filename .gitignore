@@ -1,0 +1,15 @@
+# build output
+/geet
+/web/dist/*
+!/web/dist/.gitkeep
+/web/node_modules/
+
+# local data
+*.db
+*.db-wal
+*.db-shm
+/testdata/
+
+# editor / os
+.DS_Store
+*.swp
