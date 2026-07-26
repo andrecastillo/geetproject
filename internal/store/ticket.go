@@ -18,11 +18,13 @@ type TicketPatch struct {
 	Type        *string
 	StatusSlug  *string
 	ParentKey   *string
+	ProjectSlug *string
 	LabelIDs    *[]int64
 }
 
 // NewTicket is the input to CreateTicket.
 type NewTicket struct {
+	ProjectSlug string
 	Type        string
 	Title       string
 	Description string
@@ -88,6 +90,24 @@ func (s *Store) CreateTicket(ctx context.Context, in NewTicket) (*Ticket, error)
 		return nil, err
 	}
 
+	// A child always lives in its parent's project. Defaulting to it means the
+	// caller can leave the project out entirely when adding a sub-task.
+	projectSlug := in.ProjectSlug
+	if parent != nil {
+		if projectSlug != "" && projectSlug != parent.ProjectSlug {
+			return nil, fmt.Errorf("%w: %s is in project %s, so its children must be too",
+				ErrInvalid, parent.Key, parent.ProjectSlug)
+		}
+		projectSlug = parent.ProjectSlug
+	}
+	if projectSlug == "" || projectSlug == AllScope {
+		return nil, fmt.Errorf("%w: a ticket needs a project", ErrInvalid)
+	}
+	project, err := s.GetProjectBySlug(ctx, projectSlug)
+	if err != nil {
+		return nil, err
+	}
+
 	statusID, err := s.resolveStatus(ctx, in.StatusSlug)
 	if err != nil {
 		return nil, err
@@ -99,7 +119,7 @@ func (s *Store) CreateTicket(ctx context.Context, in NewTicket) (*Ticket, error)
 	}
 	defer tx.Rollback()
 
-	key, err := nextTicketKey(ctx, tx)
+	key, err := nextTicketKey(ctx, tx, project.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -109,9 +129,9 @@ func (s *Store) CreateTicket(ctx context.Context, in NewTicket) (*Ticket, error)
 		parentID = parent.ID
 	}
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO ticket (key, type, title, description, status_id, parent_id, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?)`,
-		key, in.Type, strings.TrimSpace(in.Title), in.Description, statusID, parentID, ts, ts)
+		`INSERT INTO ticket (key, project_id, type, title, description, status_id, parent_id, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		key, project.ID, in.Type, strings.TrimSpace(in.Title), in.Description, statusID, parentID, ts, ts)
 	if err != nil {
 		return nil, err
 	}
@@ -128,34 +148,23 @@ func (s *Store) CreateTicket(ctx context.Context, in NewTicket) (*Ticket, error)
 	return s.GetTicket(ctx, key)
 }
 
-// nextTicketKey allocates the next T-N from the persistent counter. Keys are one
-// global sequence rather than per-type, so a ticket's key survives a change of
-// type, and the counter only ever moves forward so a deleted ticket's key is
-// never handed to a different ticket later.
-func nextTicketKey(ctx context.Context, tx *sql.Tx) (string, error) {
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO meta (key, value) VALUES ('ticket_seq', '1')
-		ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1`); err != nil {
+// nextTicketKey allocates the next PREFIX-N from the project's counter. The
+// counter only ever moves forward, so a deleted ticket's key is never handed to
+// a different ticket later - which is what lets a "see MAI-2" written into a
+// description stay meaningful. Keys are per project but not per type, so a
+// ticket's key survives a change of type.
+func nextTicketKey(ctx context.Context, tx *sql.Tx, projectID int64) (string, error) {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE project SET ticket_seq = ticket_seq + 1 WHERE id = ?`, projectID); err != nil {
 		return "", err
 	}
+	var prefix string
 	var n int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'ticket_seq'`).Scan(&n); err != nil {
+		`SELECT prefix, ticket_seq FROM project WHERE id = ?`, projectID).Scan(&prefix, &n); err != nil {
 		return "", err
 	}
-	return "T-" + strconv.Itoa(n), nil
-}
-
-func parseTicketKey(k string) (int, bool) {
-	rest, ok := strings.CutPrefix(k, "T-")
-	if !ok {
-		return 0, false
-	}
-	n, err := strconv.Atoi(rest)
-	if err != nil {
-		return 0, false
-	}
-	return n, true
+	return prefix + "-" + strconv.Itoa(n), nil
 }
 
 func (s *Store) resolveStatus(ctx context.Context, slug string) (int64, error) {
@@ -220,6 +229,32 @@ func (s *Store) UpdateTicket(ctx context.Context, key string, p TicketPatch) (*T
 		return nil, err
 	}
 
+	// Work out which project the ticket ends up in.
+	targetProject := cur.ProjectID
+	movingProject := false
+	if p.ProjectSlug != nil && *p.ProjectSlug != "" && *p.ProjectSlug != cur.ProjectSlug {
+		if *p.ProjectSlug == AllScope {
+			return nil, fmt.Errorf("%w: %q is not a project", ErrInvalid, AllScope)
+		}
+		next, err := s.GetProjectBySlug(ctx, *p.ProjectSlug)
+		if err != nil {
+			return nil, err
+		}
+		targetProject = next.ID
+		movingProject = true
+	}
+	// A ticket and its parent must share a project, so moving a child on its
+	// own would strand it on neither project's board. Move the parent instead
+	// and the whole subtree follows.
+	if parent != nil && parent.ProjectID != targetProject {
+		if movingProject {
+			return nil, fmt.Errorf("%w: %s belongs to %s; move its parent %s to move it",
+				ErrInvalid, key, cur.ProjectSlug, parent.Key)
+		}
+		return nil, fmt.Errorf("%w: %s is in a different project from %s",
+			ErrInvalid, parent.Key, key)
+	}
+
 	// A type change would re-parent every child under a level that may not
 	// accept them, so reject it while children exist rather than silently
 	// leaving an illegal tree behind.
@@ -269,6 +304,21 @@ func (s *Store) UpdateTicket(ctx context.Context, key string, p TicketPatch) (*T
 		return nil, err
 	}
 	defer tx.Rollback()
+
+	if movingProject {
+		// Descendants move with their ancestor, or they would end up in a
+		// project their parent is not in.
+		if _, err := tx.ExecContext(ctx, `
+			WITH RECURSIVE subtree(id) AS (
+			  SELECT ? UNION ALL
+			  SELECT t.id FROM ticket t JOIN subtree ON t.parent_id = subtree.id
+			)
+			UPDATE ticket SET project_id = ?, updated_at = ?
+			WHERE id IN (SELECT id FROM subtree)`,
+			cur.ID, targetProject, now()); err != nil {
+			return nil, err
+		}
+	}
 
 	if len(sets) > 0 {
 		sets = append(sets, "updated_at = ?")
@@ -353,6 +403,10 @@ func (s *Store) ListTickets(ctx context.Context, f TicketFilter) ([]Ticket, erro
 	where := []string{}
 	args := []any{}
 
+	// A nil ProjectID is the cross-project scope, so it adds no clause at all.
+	if f.ProjectID != nil {
+		where, args = append(where, "t.project_id = ?"), append(args, *f.ProjectID)
+	}
 	if f.Type != "" && f.Type != "any" {
 		where, args = append(where, "t.type = ?"), append(args, f.Type)
 	}
@@ -401,10 +455,12 @@ func (s *Store) queryTickets(ctx context.Context, where string, args []any, orde
 	q := `
 		SELECT t.id, t.key, t.type, t.title, t.description, t.status_id,
 		       t.parent_id, COALESCE(p.key,''), COALESCE(p.title,''),
+		       t.project_id, pr.slug, pr.name,
 		       t.created_at, t.updated_at,
 		       st.id, st.name, st.slug, st.color, st.position, st.is_done
 		FROM ticket t
 		JOIN status st ON st.id = t.status_id
+		JOIN project pr ON pr.id = t.project_id
 		LEFT JOIN ticket p ON p.id = t.parent_id
 		` + where + " " + order
 
@@ -422,7 +478,9 @@ func (s *Store) queryTickets(ctx context.Context, where string, args []any, orde
 		var done int
 		var parentID sql.NullInt64
 		if err := rows.Scan(&t.ID, &t.Key, &t.Type, &t.Title, &t.Description, &t.StatusID,
-			&parentID, &t.ParentKey, &t.ParentTitle, &t.CreatedAt, &t.UpdatedAt,
+			&parentID, &t.ParentKey, &t.ParentTitle,
+			&t.ProjectID, &t.ProjectSlug, &t.ProjectName,
+			&t.CreatedAt, &t.UpdatedAt,
 			&st.ID, &st.Name, &st.Slug, &st.Color, &st.Position, &done); err != nil {
 			return nil, err
 		}

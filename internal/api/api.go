@@ -31,12 +31,20 @@ func New(st *store.Store, web http.Handler) http.Handler {
 	mux.HandleFunc("PATCH /api/labels/{id}", s.updateLabel)
 	mux.HandleFunc("DELETE /api/labels/{id}", s.deleteLabel)
 
-	mux.HandleFunc("GET /api/boards", s.listBoards)
-	mux.HandleFunc("POST /api/boards", s.createBoard)
-	mux.HandleFunc("GET /api/boards/{slug}", s.getBoard)
-	mux.HandleFunc("PATCH /api/boards/{slug}", s.updateBoard)
-	mux.HandleFunc("DELETE /api/boards/{slug}", s.deleteBoard)
-	mux.HandleFunc("PUT /api/boards/{slug}/columns", s.setBoardColumns)
+	mux.HandleFunc("GET /api/projects", s.listProjects)
+	mux.HandleFunc("POST /api/projects", s.createProject)
+	mux.HandleFunc("GET /api/projects/{project}", s.getProject)
+	mux.HandleFunc("PATCH /api/projects/{project}", s.updateProject)
+	mux.HandleFunc("DELETE /api/projects/{project}", s.deleteProject)
+
+	// Views live under a scope: a project slug, or "all" for cross-project.
+	// A view slug alone is no longer unique, so there is no flat /api/boards.
+	mux.HandleFunc("GET /api/projects/{project}/boards", s.listBoards)
+	mux.HandleFunc("POST /api/projects/{project}/boards", s.createBoard)
+	mux.HandleFunc("GET /api/projects/{project}/boards/{slug}", s.getBoard)
+	mux.HandleFunc("PATCH /api/projects/{project}/boards/{slug}", s.updateBoard)
+	mux.HandleFunc("DELETE /api/projects/{project}/boards/{slug}", s.deleteBoard)
+	mux.HandleFunc("PUT /api/projects/{project}/boards/{slug}/columns", s.setBoardColumns)
 
 	mux.HandleFunc("GET /api/tickets", s.listTickets)
 	mux.HandleFunc("POST /api/tickets", s.createTicket)
@@ -181,10 +189,80 @@ func (s *Server) deleteLabel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
+// ---- projects ----
+
+func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
+	out, err := s.st.ListProjects(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
+	p, err := s.st.GetProjectBySlug(r.Context(), r.PathValue("project"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name   string `json:"name"`
+		Slug   string `json:"slug"`
+		Prefix string `json:"prefix"`
+		Color  string `json:"color"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	p, err := s.st.CreateProject(r.Context(), store.Project{
+		Name: req.Name, Slug: req.Slug, Prefix: req.Prefix, Color: req.Color,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+
+func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name     *string `json:"name"`
+		Prefix   *string `json:"prefix"`
+		Color    *string `json:"color"`
+		Position *int    `json:"position"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	p, err := s.st.UpdateProject(r.Context(), r.PathValue("project"), store.ProjectPatch{
+		Name: req.Name, Prefix: req.Prefix, Color: req.Color, Position: req.Position,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
+	n, err := s.st.DeleteProject(r.Context(), r.PathValue("project"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	// Report what went with it, so a CLI can say so rather than guess.
+	writeJSON(w, http.StatusOK, map[string]int{"deleted_tickets": n})
+}
+
 // ---- boards ----
 
 func (s *Server) listBoards(w http.ResponseWriter, r *http.Request) {
-	out, err := s.st.ListBoards(r.Context())
+	out, err := s.st.ListBoards(r.Context(), r.PathValue("project"))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -204,12 +282,18 @@ func (s *Server) createBoard(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	scope := r.PathValue("project")
+	projectID, err := s.scopeID(r, scope)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	labels := make([]store.Label, 0, len(req.FilterLabelIDs))
 	for _, id := range req.FilterLabelIDs {
 		labels = append(labels, store.Label{ID: id})
 	}
 	b, err := s.st.CreateBoard(r.Context(), store.Board{
-		Name: req.Name, Slug: req.Slug, FilterType: req.FilterType,
+		Name: req.Name, Slug: req.Slug, ProjectID: projectID, FilterType: req.FilterType,
 		FilterLabelMode: req.FilterLabelMode, FilterLabels: labels,
 	})
 	if err != nil {
@@ -236,8 +320,20 @@ func (s *Server) createBoard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, b)
 }
 
+// scopeID resolves a scope path segment to a project id, or nil for "all".
+func (s *Server) scopeID(r *http.Request, scope string) (*int64, error) {
+	if scope == "" || scope == store.AllScope {
+		return nil, nil
+	}
+	p, err := s.st.GetProjectBySlug(r.Context(), scope)
+	if err != nil {
+		return nil, err
+	}
+	return &p.ID, nil
+}
+
 func (s *Server) getBoard(w http.ResponseWriter, r *http.Request) {
-	view, err := s.st.GetBoard(r.Context(), r.PathValue("slug"))
+	view, err := s.st.GetBoard(r.Context(), r.PathValue("project"), r.PathValue("slug"))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -255,7 +351,7 @@ func (s *Server) updateBoard(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	b, err := s.st.UpdateBoard(r.Context(), r.PathValue("slug"), store.BoardPatch{
+	b, err := s.st.UpdateBoard(r.Context(), r.PathValue("project"), r.PathValue("slug"), store.BoardPatch{
 		Name: req.Name, FilterType: req.FilterType,
 		FilterLabelMode: req.FilterLabelMode, FilterLabelIDs: req.FilterLabelIDs,
 	})
@@ -267,7 +363,7 @@ func (s *Server) updateBoard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteBoard(w http.ResponseWriter, r *http.Request) {
-	if err := s.st.DeleteBoard(r.Context(), r.PathValue("slug")); err != nil {
+	if err := s.st.DeleteBoard(r.Context(), r.PathValue("project"), r.PathValue("slug")); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -281,7 +377,7 @@ func (s *Server) setBoardColumns(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	b, err := s.st.GetBoardBySlug(r.Context(), r.PathValue("slug"))
+	b, err := s.st.GetBoardBySlug(r.Context(), r.PathValue("project"), r.PathValue("slug"))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -290,7 +386,7 @@ func (s *Server) setBoardColumns(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	view, err := s.st.GetBoard(r.Context(), b.Slug)
+	view, err := s.st.GetBoard(r.Context(), r.PathValue("project"), b.Slug)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -306,6 +402,15 @@ func (s *Server) listTickets(w http.ResponseWriter, r *http.Request) {
 		Type:      q.Get("type"),
 		LabelMode: q.Get("label_mode"),
 		Search:    q.Get("q"),
+	}
+	// No project, or "all", means every project.
+	if v := q.Get("project"); v != "" && v != store.AllScope {
+		p, err := s.st.GetProjectBySlug(r.Context(), v)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		f.ProjectID = &p.ID
 	}
 	if v := q.Get("status"); v != "" {
 		statuses, err := s.st.ListStatuses(r.Context())
@@ -351,6 +456,7 @@ func (s *Server) listTickets(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createTicket(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		Project     string  `json:"project"`
 		Type        string  `json:"type"`
 		Title       string  `json:"title"`
 		Description string  `json:"description"`
@@ -362,7 +468,7 @@ func (s *Server) createTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := s.st.CreateTicket(r.Context(), store.NewTicket{
-		Type: req.Type, Title: req.Title, Description: req.Description,
+		ProjectSlug: req.Project, Type: req.Type, Title: req.Title, Description: req.Description,
 		StatusSlug: req.Status, ParentKey: req.Parent, LabelIDs: req.LabelIDs,
 	})
 	if err != nil {
@@ -419,6 +525,7 @@ func (s *Server) updateTicket(w http.ResponseWriter, r *http.Request) {
 		Type        *string  `json:"type"`
 		Status      *string  `json:"status"`
 		Parent      *string  `json:"parent"`
+		Project     *string  `json:"project"`
 		LabelIDs    *[]int64 `json:"label_ids"`
 	}
 	if !decode(w, r, &req) {
@@ -426,7 +533,8 @@ func (s *Server) updateTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.st.UpdateTicket(r.Context(), r.PathValue("key"), store.TicketPatch{
 		Title: req.Title, Description: req.Description, Type: req.Type,
-		StatusSlug: req.Status, ParentKey: req.Parent, LabelIDs: req.LabelIDs,
+		StatusSlug: req.Status, ParentKey: req.Parent, ProjectSlug: req.Project,
+		LabelIDs: req.LabelIDs,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -445,9 +553,10 @@ func (s *Server) deleteTicket(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) moveTicket(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Board  string `json:"board"`
-		Status string `json:"status"`
-		After  string `json:"after"`
+		Project string `json:"project"`
+		Board   string `json:"board"`
+		Status  string `json:"status"`
+		After   string `json:"after"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -456,7 +565,7 @@ func (s *Server) moveTicket(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "board is required")
 		return
 	}
-	view, err := s.st.MoveCard(r.Context(), req.Board, r.PathValue("key"), req.Status, req.After)
+	view, err := s.st.MoveCard(r.Context(), req.Project, req.Board, r.PathValue("key"), req.Status, req.After)
 	if err != nil {
 		writeErr(w, err)
 		return

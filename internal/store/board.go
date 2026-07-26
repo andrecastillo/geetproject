@@ -8,22 +8,50 @@ import (
 	"strings"
 )
 
-func (s *Store) ListBoards(ctx context.Context) ([]Board, error) {
+const boardColumns = `b.id, b.name, b.slug, b.project_id, COALESCE(pr.slug, '` + AllScope + `'),
+	b.filter_type, b.filter_label_mode, b.position, b.created_at`
+
+func scanBoard(sc interface{ Scan(...any) error }) (Board, error) {
+	var b Board
+	var projectID sql.NullInt64
+	if err := sc.Scan(&b.ID, &b.Name, &b.Slug, &projectID, &b.ProjectSlug,
+		&b.FilterType, &b.FilterLabelMode, &b.Position, &b.CreatedAt); err != nil {
+		return b, err
+	}
+	if projectID.Valid {
+		v := projectID.Int64
+		b.ProjectID = &v
+	}
+	b.FilterLabels = []Label{}
+	return b, nil
+}
+
+// ListBoards returns the views in one scope: a project slug, or AllScope for
+// the cross-project views.
+func (s *Store) ListBoards(ctx context.Context, scope string) ([]Board, error) {
+	projectID, err := s.resolveScope(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	where := "WHERE b.project_id IS NULL"
+	args := []any{}
+	if projectID != nil {
+		where, args = "WHERE b.project_id = ?", []any{*projectID}
+	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, slug, filter_type, filter_label_mode, position, created_at
-		FROM board ORDER BY position, id`)
+		SELECT `+boardColumns+`
+		FROM board b LEFT JOIN project pr ON pr.id = b.project_id
+		`+where+` ORDER BY b.position, b.id`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Board{}
 	for rows.Next() {
-		var b Board
-		if err := rows.Scan(&b.ID, &b.Name, &b.Slug, &b.FilterType,
-			&b.FilterLabelMode, &b.Position, &b.CreatedAt); err != nil {
+		b, err := scanBoard(rows)
+		if err != nil {
 			return nil, err
 		}
-		b.FilterLabels = []Label{}
 		out = append(out, b)
 	}
 	if err := rows.Err(); err != nil {
@@ -39,14 +67,24 @@ func (s *Store) ListBoards(ctx context.Context) ([]Board, error) {
 	return out, nil
 }
 
-func (s *Store) GetBoardBySlug(ctx context.Context, slug string) (*Board, error) {
-	var b Board
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, slug, filter_type, filter_label_mode, position, created_at
-		FROM board WHERE slug = ?`, slug).
-		Scan(&b.ID, &b.Name, &b.Slug, &b.FilterType, &b.FilterLabelMode, &b.Position, &b.CreatedAt)
+// GetBoardBySlug looks a view up within a scope. Board slugs are only unique
+// per scope, so the scope is not optional.
+func (s *Store) GetBoardBySlug(ctx context.Context, scope, slug string) (*Board, error) {
+	projectID, err := s.resolveScope(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	where := "WHERE b.slug = ? AND b.project_id IS NULL"
+	args := []any{slug}
+	if projectID != nil {
+		where, args = "WHERE b.slug = ? AND b.project_id = ?", []any{slug, *projectID}
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT `+boardColumns+`
+		FROM board b LEFT JOIN project pr ON pr.id = b.project_id `+where, args...)
+	b, err := scanBoard(row)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("%w: board %s", ErrNotFound, slug)
+		return nil, fmt.Errorf("%w: view %s in %s", ErrNotFound, slug, scope)
 	}
 	if err != nil {
 		return nil, err
@@ -114,8 +152,18 @@ func (s *Store) CreateBoard(ctx context.Context, in Board) (*Board, error) {
 		in.FilterLabelMode = "any"
 	}
 	if in.Position == 0 {
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT COALESCE(MAX(position),0)+1 FROM board`).Scan(&in.Position); err != nil {
+		// Position is per scope, so a new view in one project doesn't inherit
+		// an ordering number from an unrelated project's views.
+		var err error
+		if in.ProjectID == nil {
+			err = s.db.QueryRowContext(ctx,
+				`SELECT COALESCE(MAX(position),0)+1 FROM board WHERE project_id IS NULL`).Scan(&in.Position)
+		} else {
+			err = s.db.QueryRowContext(ctx,
+				`SELECT COALESCE(MAX(position),0)+1 FROM board WHERE project_id = ?`,
+				*in.ProjectID).Scan(&in.Position)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -127,12 +175,13 @@ func (s *Store) CreateBoard(ctx context.Context, in Board) (*Board, error) {
 	defer tx.Rollback()
 
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO board (name, slug, filter_type, filter_label_mode, position, created_at)
-		VALUES (?,?,?,?,?,?)`,
-		strings.TrimSpace(in.Name), in.Slug, in.FilterType, in.FilterLabelMode, in.Position, now())
+		INSERT INTO board (name, slug, project_id, filter_type, filter_label_mode, position, created_at)
+		VALUES (?,?,?,?,?,?,?)`,
+		strings.TrimSpace(in.Name), in.Slug, in.ProjectID,
+		in.FilterType, in.FilterLabelMode, in.Position, now())
 	if err != nil {
 		if isUniqueViolation(err) {
-			return nil, fmt.Errorf("%w: board %q already exists", ErrConflict, in.Slug)
+			return nil, fmt.Errorf("%w: a view called %q already exists here", ErrConflict, in.Slug)
 		}
 		return nil, err
 	}
@@ -149,7 +198,26 @@ func (s *Store) CreateBoard(ctx context.Context, in Board) (*Board, error) {
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return s.GetBoardBySlug(ctx, in.Slug)
+	return s.getBoardByID(ctx, id)
+}
+
+func (s *Store) getBoardByID(ctx context.Context, id int64) (*Board, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT `+boardColumns+`
+		FROM board b LEFT JOIN project pr ON pr.id = b.project_id WHERE b.id = ?`, id)
+	b, err := scanBoard(row)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("%w: view %d", ErrNotFound, id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	ls, err := s.boardFilterLabels(ctx, b.ID)
+	if err != nil {
+		return nil, err
+	}
+	b.FilterLabels = ls
+	return &b, nil
 }
 
 // BoardPatch is a partial board update; nil fields are left alone.
@@ -160,8 +228,8 @@ type BoardPatch struct {
 	FilterLabelIDs  *[]int64
 }
 
-func (s *Store) UpdateBoard(ctx context.Context, slug string, p BoardPatch) (*Board, error) {
-	b, err := s.GetBoardBySlug(ctx, slug)
+func (s *Store) UpdateBoard(ctx context.Context, scope, slug string, p BoardPatch) (*Board, error) {
+	b, err := s.GetBoardBySlug(ctx, scope, slug)
 	if err != nil {
 		return nil, err
 	}
@@ -206,22 +274,16 @@ func (s *Store) UpdateBoard(ctx context.Context, slug string, p BoardPatch) (*Bo
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return s.GetBoardBySlug(ctx, slug)
+	return s.getBoardByID(ctx, b.ID)
 }
 
-func (s *Store) DeleteBoard(ctx context.Context, slug string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM board WHERE slug = ?`, slug)
+func (s *Store) DeleteBoard(ctx context.Context, scope, slug string) error {
+	b, err := s.GetBoardBySlug(ctx, scope, slug)
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: board %s", ErrNotFound, slug)
-	}
-	return nil
+	_, err = s.db.ExecContext(ctx, `DELETE FROM board WHERE id = ?`, b.ID)
+	return err
 }
 
 // BoardColumns returns the statuses this board shows, in column order.
@@ -272,8 +334,8 @@ func (s *Store) SetBoardColumns(ctx context.Context, boardID int64, statusIDs []
 // never disagree about it: a sub-task renders inside its parent's card while it
 // shares the parent's status, and becomes a card of its own the moment it
 // doesn't.
-func (s *Store) GetBoard(ctx context.Context, slug string) (*BoardView, error) {
-	b, err := s.GetBoardBySlug(ctx, slug)
+func (s *Store) GetBoard(ctx context.Context, scope, slug string) (*BoardView, error) {
+	b, err := s.GetBoardBySlug(ctx, scope, slug)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +348,10 @@ func (s *Store) GetBoard(ctx context.Context, slug string) (*BoardView, error) {
 	for _, l := range b.FilterLabels {
 		labelIDs = append(labelIDs, l.ID)
 	}
+	// b.ProjectID nil is the cross-project scope, which the filter reads as
+	// "every project".
 	matched, err := s.ListTickets(ctx, TicketFilter{
+		ProjectID: b.ProjectID,
 		Type:      b.FilterType,
 		LabelIDs:  labelIDs,
 		LabelMode: b.FilterLabelMode,
@@ -436,8 +501,8 @@ func (s *Store) cardPositions(ctx context.Context, boardID int64) (map[int64]flo
 // The whole target column is renumbered rather than fiddling with midpoints:
 // columns on a personal board are small, and integer positions with no drift are
 // far easier to reason about than fractional ones.
-func (s *Store) MoveCard(ctx context.Context, boardSlug, ticketKey, statusSlug, afterKey string) (*BoardView, error) {
-	b, err := s.GetBoardBySlug(ctx, boardSlug)
+func (s *Store) MoveCard(ctx context.Context, scope, boardSlug, ticketKey, statusSlug, afterKey string) (*BoardView, error) {
+	b, err := s.GetBoardBySlug(ctx, scope, boardSlug)
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +521,7 @@ func (s *Store) MoveCard(ctx context.Context, boardSlug, ticketKey, statusSlug, 
 	}
 
 	// Re-assemble so the column reflects the new status, then reorder within it.
-	view, err := s.GetBoard(ctx, boardSlug)
+	view, err := s.GetBoard(ctx, scope, boardSlug)
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +574,7 @@ func (s *Store) MoveCard(ctx context.Context, boardSlug, ticketKey, statusSlug, 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return s.GetBoard(ctx, boardSlug)
+	return s.GetBoard(ctx, scope, boardSlug)
 }
 
 func findCard(cards []Card, id int64) *Card {

@@ -19,6 +19,9 @@ func newTestStore(t *testing.T) *Store {
 
 func mustCreate(t *testing.T, s *Store, in NewTicket) *Ticket {
 	t.Helper()
+	if in.ProjectSlug == "" && in.ParentKey == "" {
+		in.ProjectSlug = "demo"
+	}
 	tk, err := s.CreateTicket(context.Background(), in)
 	if err != nil {
 		t.Fatalf("create %q: %v", in.Title, err)
@@ -26,8 +29,27 @@ func mustCreate(t *testing.T, s *Store, in NewTicket) *Ticket {
 	return tk
 }
 
-func TestSeedCreatesStatusesAndBoards(t *testing.T) {
+// mustProject creates a project and returns it.
+func mustProject(t *testing.T, s *Store, name, slug, prefix string) *Project {
+	t.Helper()
+	p, err := s.CreateProject(context.Background(), Project{Name: name, Slug: slug, Prefix: prefix})
+	if err != nil {
+		t.Fatalf("create project %q: %v", name, err)
+	}
+	return p
+}
+
+// newSeededStore is a store with one project, "demo" (prefix DEMO), which is
+// what mustCreate files tickets under by default.
+func newSeededStore(t *testing.T) *Store {
+	t.Helper()
 	s := newTestStore(t)
+	mustProject(t, s, "Demo", "demo", "DEMO")
+	return s
+}
+
+func TestSeedCreatesStatusesAndBoards(t *testing.T) {
+	s := newSeededStore(t)
 	ctx := context.Background()
 
 	st, err := s.ListStatuses(ctx)
@@ -41,14 +63,14 @@ func TestSeedCreatesStatusesAndBoards(t *testing.T) {
 		t.Fatalf("unexpected seeded statuses: %+v", st)
 	}
 
-	boards, err := s.ListBoards(ctx)
+	boards, err := s.ListBoards(ctx, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(boards) != 2 {
 		t.Fatalf("want 2 seeded boards, got %d", len(boards))
 	}
-	view, err := s.GetBoard(ctx, "epics")
+	view, err := s.GetBoard(ctx, "demo", "epics")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +80,7 @@ func TestSeedCreatesStatusesAndBoards(t *testing.T) {
 }
 
 func TestHierarchyRules(t *testing.T) {
-	s := newTestStore(t)
+	s := newSeededStore(t)
 	ctx := context.Background()
 
 	epic := mustCreate(t, s, NewTicket{Type: TypeEpic, Title: "Epic"})
@@ -84,7 +106,7 @@ func TestHierarchyRules(t *testing.T) {
 }
 
 func TestCannotChangeTypeWithChildren(t *testing.T) {
-	s := newTestStore(t)
+	s := newSeededStore(t)
 	ctx := context.Background()
 	epic := mustCreate(t, s, NewTicket{Type: TypeEpic, Title: "Epic"})
 	mustCreate(t, s, NewTicket{Type: TypeTask, Title: "Task", ParentKey: epic.Key})
@@ -98,7 +120,7 @@ func TestCannotChangeTypeWithChildren(t *testing.T) {
 // A PATCH that mentions only the title must not disturb anything else. This is
 // the failure mode that destroys real work.
 func TestPartialUpdateLeavesOtherFieldsAlone(t *testing.T) {
-	s := newTestStore(t)
+	s := newSeededStore(t)
 	ctx := context.Background()
 
 	label, err := s.CreateLabel(ctx, "backend", "#f00")
@@ -130,7 +152,7 @@ func TestPartialUpdateLeavesOtherFieldsAlone(t *testing.T) {
 }
 
 func TestDeleteCascadesToChildrenAndComments(t *testing.T) {
-	s := newTestStore(t)
+	s := newSeededStore(t)
 	ctx := context.Background()
 
 	epic := mustCreate(t, s, NewTicket{Type: TypeEpic, Title: "Epic"})
@@ -168,7 +190,7 @@ func TestDeleteCascadesToChildrenAndComments(t *testing.T) {
 // The board's defining behavior: nest while status matches, break out when it
 // doesn't, re-nest when it matches again.
 func TestSubtaskNestsAndBreaksOut(t *testing.T) {
-	s := newTestStore(t)
+	s := newSeededStore(t)
 	ctx := context.Background()
 
 	task := mustCreate(t, s, NewTicket{Type: TypeTask, Title: "Login", StatusSlug: "todo"})
@@ -185,7 +207,7 @@ func TestSubtaskNestsAndBreaksOut(t *testing.T) {
 		return nil
 	}
 
-	view, err := s.GetBoard(ctx, "tasks")
+	view, err := s.GetBoard(ctx, "demo", "all-work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +224,7 @@ func TestSubtaskNestsAndBreaksOut(t *testing.T) {
 	if _, err := s.UpdateTicket(ctx, sub.Key, TicketPatch{StatusSlug: &done}); err != nil {
 		t.Fatal(err)
 	}
-	view, err = s.GetBoard(ctx, "tasks")
+	view, err = s.GetBoard(ctx, "demo", "all-work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +244,7 @@ func TestSubtaskNestsAndBreaksOut(t *testing.T) {
 	if _, err := s.UpdateTicket(ctx, sub.Key, TicketPatch{StatusSlug: &todoSlug}); err != nil {
 		t.Fatal(err)
 	}
-	view, err = s.GetBoard(ctx, "tasks")
+	view, err = s.GetBoard(ctx, "demo", "all-work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,13 +259,13 @@ func TestSubtaskNestsAndBreaksOut(t *testing.T) {
 
 // The epics board filters to epics, so child tasks must not appear as cards on it.
 func TestEpicBoardShowsOnlyEpics(t *testing.T) {
-	s := newTestStore(t)
+	s := newSeededStore(t)
 	ctx := context.Background()
 
 	epic := mustCreate(t, s, NewTicket{Type: TypeEpic, Title: "Epic", StatusSlug: "todo"})
 	mustCreate(t, s, NewTicket{Type: TypeTask, Title: "Child", ParentKey: epic.Key, StatusSlug: "todo"})
 
-	view, err := s.GetBoard(ctx, "epics")
+	view, err := s.GetBoard(ctx, "demo", "epics")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +288,7 @@ func TestEpicBoardShowsOnlyEpics(t *testing.T) {
 }
 
 func TestMoveCardOrdersWithinColumn(t *testing.T) {
-	s := newTestStore(t)
+	s := newSeededStore(t)
 	ctx := context.Background()
 
 	a := mustCreate(t, s, NewTicket{Type: TypeTask, Title: "A", StatusSlug: "todo"})
@@ -288,7 +310,7 @@ func TestMoveCardOrdersWithinColumn(t *testing.T) {
 	}
 
 	// Move C to the top of todo.
-	view, err := s.MoveCard(ctx, "tasks", c.Key, "todo", "")
+	view, err := s.MoveCard(ctx, "demo", "all-work", c.Key, "todo", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +319,7 @@ func TestMoveCardOrdersWithinColumn(t *testing.T) {
 	}
 
 	// Move A below B.
-	view, err = s.MoveCard(ctx, "tasks", a.Key, "todo", b.Key)
+	view, err = s.MoveCard(ctx, "demo", "all-work", a.Key, "todo", b.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,10 +332,10 @@ func TestMoveCardOrdersWithinColumn(t *testing.T) {
 	}
 
 	// Moving across columns applies the new status and survives a reload.
-	if _, err := s.MoveCard(ctx, "tasks", b.Key, "in-progress", ""); err != nil {
+	if _, err := s.MoveCard(ctx, "demo", "all-work", b.Key, "in-progress", ""); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := s.GetBoard(ctx, "tasks")
+	reloaded, err := s.GetBoard(ctx, "demo", "all-work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +348,7 @@ func TestMoveCardOrdersWithinColumn(t *testing.T) {
 }
 
 func TestLabelFilteredBoard(t *testing.T) {
-	s := newTestStore(t)
+	s := newSeededStore(t)
 	ctx := context.Background()
 
 	app, err := s.CreateLabel(ctx, "app", "#00f")
@@ -336,8 +358,12 @@ func TestLabelFilteredBoard(t *testing.T) {
 	mustCreate(t, s, NewTicket{Type: TypeTask, Title: "In app", StatusSlug: "todo", LabelIDs: []int64{app.ID}})
 	mustCreate(t, s, NewTicket{Type: TypeTask, Title: "Elsewhere", StatusSlug: "todo"})
 
+	demo, err := s.GetProjectBySlug(ctx, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
 	board, err := s.CreateBoard(ctx, Board{Name: "App Layer", FilterType: TypeTask,
-		FilterLabels: []Label{*app}})
+		ProjectID: &demo.ID, FilterLabels: []Label{*app}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +379,7 @@ func TestLabelFilteredBoard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	view, err := s.GetBoard(ctx, "app-layer")
+	view, err := s.GetBoard(ctx, "demo", "app-layer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +396,7 @@ func TestLabelFilteredBoard(t *testing.T) {
 }
 
 func TestDuplicateLabelRejected(t *testing.T) {
-	s := newTestStore(t)
+	s := newSeededStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateLabel(ctx, "dup", ""); err != nil {
 		t.Fatal(err)
@@ -381,18 +407,18 @@ func TestDuplicateLabelRejected(t *testing.T) {
 }
 
 func TestKeysAreSequential(t *testing.T) {
-	s := newTestStore(t)
+	s := newSeededStore(t)
 	a := mustCreate(t, s, NewTicket{Type: TypeTask, Title: "one"})
 	b := mustCreate(t, s, NewTicket{Type: TypeTask, Title: "two"})
-	if a.Key != "T-1" || b.Key != "T-2" {
-		t.Fatalf("want T-1/T-2, got %s/%s", a.Key, b.Key)
+	if a.Key != "DEMO-1" || b.Key != "DEMO-2" {
+		t.Fatalf("want DEMO-1/DEMO-2, got %s/%s", a.Key, b.Key)
 	}
 	if err := s.DeleteTicket(context.Background(), b.Key); err != nil {
 		t.Fatal(err)
 	}
 	// Keys must not be reused after a delete.
 	c := mustCreate(t, s, NewTicket{Type: TypeTask, Title: "three"})
-	if c.Key != "T-3" {
-		t.Fatalf("want T-3 after deleting T-2, got %s", c.Key)
+	if c.Key != "DEMO-3" {
+		t.Fatalf("want DEMO-3 after deleting DEMO-2, got %s", c.Key)
 	}
 }

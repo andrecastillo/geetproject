@@ -18,7 +18,13 @@ func newTestServer(t *testing.T) http.Handler {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return New(st, nil)
+	h := New(st, nil)
+	// Tickets need somewhere to live, so every API test starts with one project.
+	if rec := do(t, h, "POST", "/api/projects",
+		map[string]any{"name": "Demo", "slug": "demo", "prefix": "DEMO"}, nil); rec.Code != http.StatusCreated {
+		t.Fatalf("seed project: %d %s", rec.Code, rec.Body)
+	}
+	return h
 }
 
 // do issues a request and decodes the JSON body into out (when non-nil).
@@ -54,12 +60,12 @@ func TestTicketLifecycle(t *testing.T) {
 
 	var epic store.Ticket
 	rec := do(t, h, "POST", "/api/tickets",
-		map[string]any{"type": "epic", "title": "Epic", "status": "todo"}, &epic)
+		map[string]any{"project": "demo", "type": "epic", "title": "Epic", "status": "todo"}, &epic)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create epic: want 201, got %d (%s)", rec.Code, rec.Body)
 	}
-	if epic.Key != "T-1" {
-		t.Fatalf("want key T-1, got %s", epic.Key)
+	if epic.Key != "DEMO-1" {
+		t.Fatalf("want key DEMO-1, got %s", epic.Key)
 	}
 
 	var task store.Ticket
@@ -110,11 +116,11 @@ func TestTicketLifecycle(t *testing.T) {
 func TestErrorMapping(t *testing.T) {
 	h := newTestServer(t)
 
-	if rec := do(t, h, "GET", "/api/tickets/T-999", nil, nil); rec.Code != http.StatusNotFound {
+	if rec := do(t, h, "GET", "/api/tickets/DEMO-999", nil, nil); rec.Code != http.StatusNotFound {
 		t.Errorf("missing ticket: want 404, got %d", rec.Code)
 	}
 	// A sub-task with no parent violates the hierarchy.
-	rec := do(t, h, "POST", "/api/tickets", map[string]any{"type": "subtask", "title": "orphan"}, nil)
+	rec := do(t, h, "POST", "/api/tickets", map[string]any{"project": "demo", "type": "subtask", "title": "orphan"}, nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("orphan sub-task: want 400, got %d (%s)", rec.Code, rec.Body)
 	}
@@ -134,13 +140,13 @@ func TestBoardEndpointAssemblesColumns(t *testing.T) {
 
 	var task store.Ticket
 	do(t, h, "POST", "/api/tickets",
-		map[string]any{"type": "task", "title": "Login", "status": "todo"}, &task)
+		map[string]any{"project": "demo", "type": "task", "title": "Login", "status": "todo"}, &task)
 	var sub store.Ticket
 	do(t, h, "POST", "/api/tickets",
 		map[string]any{"type": "subtask", "title": "form", "parent": task.Key, "status": "todo"}, &sub)
 
 	var view store.BoardView
-	do(t, h, "GET", "/api/boards/tasks", nil, &view)
+	do(t, h, "GET", "/api/projects/demo/boards/all-work", nil, &view)
 	col := columnBySlug(t, &view, "todo")
 	if len(col.Cards) != 1 || len(col.Cards[0].Subtasks) != 1 {
 		t.Fatalf("want the sub-task nested in its parent card, got %+v", col.Cards)
@@ -148,7 +154,7 @@ func TestBoardEndpointAssemblesColumns(t *testing.T) {
 
 	// Moving the sub-task to Done breaks it out onto its own card.
 	rec := do(t, h, "POST", "/api/tickets/"+sub.Key+"/move",
-		map[string]any{"board": "tasks", "status": "done"}, &view)
+		map[string]any{"project": "demo", "board": "all-work", "status": "done"}, &view)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("move: want 200, got %d (%s)", rec.Code, rec.Body)
 	}

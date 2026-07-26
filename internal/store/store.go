@@ -62,21 +62,33 @@ func (s *Store) Close() error { return s.db.Close() }
 // DB exposes the handle for tests.
 func (s *Store) DB() *sql.DB { return s.db }
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 func (s *Store) migrate() error {
-	var have int
-	if err := s.db.QueryRow("PRAGMA user_version").Scan(&have); err != nil {
-		return fmt.Errorf("read user_version: %w", err)
-	}
 	if _, err := s.db.Exec(schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
-	// Future schema changes append migration steps here, keyed off `have`.
-	if have < schemaVersion {
-		if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
-			return fmt.Errorf("set user_version: %w", err)
+	// Migrations key off what the tables actually look like rather than off
+	// user_version alone, so re-running against an already-migrated database
+	// is a no-op no matter how it got there.
+	if err := s.migrateProjects(); err != nil {
+		return fmt.Errorf("migrate to projects: %w", err)
+	}
+	// These depend on columns the migration above adds, so they cannot live in
+	// schema.sql, which runs first.
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_ticket_project ON ticket(project_id)`,
+		// Per-scope slug uniqueness. A plain UNIQUE(project_id, slug) would not
+		// do: SQLite treats NULLs as distinct, so two cross-project views could
+		// share a slug.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_board_scope_slug ON board(COALESCE(project_id, 0), slug)`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("create index: %w", err)
 		}
+	}
+	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
+		return fmt.Errorf("set user_version: %w", err)
 	}
 	// Verify the pragma actually took, rather than trusting the DSN silently.
 	var fk int
@@ -89,6 +101,175 @@ func (s *Store) migrate() error {
 	return nil
 }
 
+func (s *Store) hasColumn(table, column string) (bool, error) {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// migrateProjects brings a pre-projects database forward: every ticket gains a
+// required project, and boards gain an optional one (NULL being the
+// cross-project scope).
+//
+// Both need a table rebuild rather than ALTER TABLE ADD COLUMN - ticket because
+// SQLite cannot add a NOT NULL column without a default, and board because its
+// slug carried a global UNIQUE constraint that has to go for two projects to
+// each have a view called 'epics'.
+func (s *Store) migrateProjects() error {
+	ticketHas, err := s.hasColumn("ticket", "project_id")
+	if err != nil {
+		return err
+	}
+	boardHas, err := s.hasColumn("board", "project_id")
+	if err != nil {
+		return err
+	}
+	if ticketHas && boardHas {
+		return nil
+	}
+
+	// PRAGMA is a no-op inside a transaction, so these toggle outside one.
+	// legacy_alter_table stops RENAME from rewriting other tables' REFERENCES
+	// clauses, which is what the documented rebuild procedure relies on.
+	if _, err := s.db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`PRAGMA legacy_alter_table = ON`); err != nil {
+		return err
+	}
+	defer func() {
+		s.db.Exec(`PRAGMA legacy_alter_table = OFF`)
+		s.db.Exec(`PRAGMA foreign_keys = ON`)
+	}()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if !ticketHas {
+		var existing int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM ticket`).Scan(&existing); err != nil {
+			return err
+		}
+		// Only invent a home for tickets that actually exist. A database with
+		// no tickets should come out the other side with no projects at all.
+		var defaultProject int64
+		if existing > 0 {
+			res, err := tx.Exec(`
+				INSERT INTO project (name, slug, prefix, color, position, ticket_seq, created_at)
+				VALUES ('General', 'general', 'GEN', '#60a5fa', 1, 0, ?)`, now())
+			if err != nil {
+				return err
+			}
+			if defaultProject, err = res.LastInsertId(); err != nil {
+				return err
+			}
+		}
+
+		for _, stmt := range []string{
+			`CREATE TABLE ticket_rebuild (
+			   id          INTEGER PRIMARY KEY,
+			   key         TEXT UNIQUE NOT NULL,
+			   project_id  INTEGER NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+			   type        TEXT NOT NULL CHECK (type IN ('epic','task','subtask')),
+			   title       TEXT NOT NULL,
+			   description TEXT NOT NULL DEFAULT '',
+			   status_id   INTEGER NOT NULL REFERENCES status(id),
+			   parent_id   INTEGER REFERENCES ticket(id) ON DELETE CASCADE,
+			   created_at  TEXT NOT NULL,
+			   updated_at  TEXT NOT NULL)`,
+		} {
+			if _, err := tx.Exec(stmt); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO ticket_rebuild
+			  (id, key, project_id, type, title, description, status_id, parent_id, created_at, updated_at)
+			SELECT id, key, ?, type, title, description, status_id, parent_id, created_at, updated_at
+			FROM ticket`, defaultProject); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DROP TABLE ticket`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`ALTER TABLE ticket_rebuild RENAME TO ticket`); err != nil {
+			return err
+		}
+
+		if existing > 0 {
+			// Keep the number, change the prefix, so a 'see T-2' already
+			// written into a description still points at the same ticket.
+			if _, err := tx.Exec(
+				`UPDATE ticket SET key = 'GEN-' || SUBSTR(key, 3) WHERE key LIKE 'T-%'`); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`
+				UPDATE project SET ticket_seq = (
+				  SELECT COALESCE(MAX(CAST(SUBSTR(key, 5) AS INTEGER)), 0)
+				  FROM ticket WHERE ticket.project_id = project.id
+				) WHERE id = ?`, defaultProject); err != nil {
+				return err
+			}
+		}
+	}
+
+	if !boardHas {
+		if _, err := tx.Exec(`
+			CREATE TABLE board_rebuild (
+			  id                INTEGER PRIMARY KEY,
+			  name              TEXT NOT NULL,
+			  slug              TEXT NOT NULL,
+			  project_id        INTEGER REFERENCES project(id) ON DELETE CASCADE,
+			  filter_type       TEXT NOT NULL DEFAULT 'any'
+			                    CHECK (filter_type IN ('epic','task','subtask','any')),
+			  filter_label_mode TEXT NOT NULL DEFAULT 'any'
+			                    CHECK (filter_label_mode IN ('any','all')),
+			  position          INTEGER NOT NULL,
+			  created_at        TEXT NOT NULL)`); err != nil {
+			return err
+		}
+		// Boards were global before projects existed, so that is what they
+		// honestly still are: the cross-project views.
+		if _, err := tx.Exec(`
+			INSERT INTO board_rebuild
+			  (id, name, slug, project_id, filter_type, filter_label_mode, position, created_at)
+			SELECT id, name, slug, NULL, filter_type, filter_label_mode, position, created_at
+			FROM board`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DROP TABLE board`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`ALTER TABLE board_rebuild RENAME TO board`); err != nil {
+			return err
+		}
+	}
+
+	// The global key counter is now per project.
+	if _, err := tx.Exec(`DELETE FROM meta WHERE key = 'ticket_seq'`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 var defaultStatuses = []Status{
 	{Name: "Backlog", Slug: "backlog", Color: "#94a3b8", Position: 1},
 	{Name: "Todo", Slug: "todo", Color: "#60a5fa", Position: 2},
@@ -96,16 +277,13 @@ var defaultStatuses = []Status{
 	{Name: "Done", Slug: "done", Color: "#4ade80", Position: 4, IsDone: true},
 }
 
-// seed populates statuses and two starter boards on a fresh database so the UI
-// is never an empty screen with no way forward.
+// seed populates statuses and the cross-project views on a fresh database.
+//
+// It deliberately creates no projects: a brand new install starts empty and the
+// sidebar prompts for the first one. Only a migrated database gets a project
+// invented for it, because its tickets have to live somewhere.
 func (s *Store) seed() error {
 	ctx := context.Background()
-
-	// Bring the key counter up to whatever is already in the table, so a
-	// database created before the counter existed can't re-issue live keys.
-	if err := s.initTicketSeq(); err != nil {
-		return err
-	}
 
 	var n int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM status").Scan(&n); err != nil {
@@ -126,63 +304,42 @@ func (s *Store) seed() error {
 		return err
 	}
 	if n == 0 {
-		for i, b := range []struct{ name, slug, ftype string }{
-			{"Epics", "epics", TypeEpic},
-			{"All Tasks", "tasks", TypeTask},
-		} {
-			created, err := s.CreateBoard(ctx, Board{
-				Name: b.name, Slug: b.slug, FilterType: b.ftype, Position: i + 1,
-			})
-			if err != nil {
-				return fmt.Errorf("seed boards: %w", err)
-			}
-			// Every status is a column by default.
-			all, err := s.ListStatuses(ctx)
-			if err != nil {
-				return err
-			}
-			ids := make([]int64, 0, len(all))
-			for _, st := range all {
-				ids = append(ids, st.ID)
-			}
-			if err := s.SetBoardColumns(ctx, created.ID, ids); err != nil {
-				return fmt.Errorf("seed board columns: %w", err)
-			}
+		if err := s.seedDefaultViews(ctx, nil); err != nil {
+			return fmt.Errorf("seed cross-project views: %w", err)
 		}
 	}
 	return nil
 }
 
-func (s *Store) initTicketSeq() error {
-	var have int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM meta WHERE key = 'ticket_seq'`).Scan(&have)
+// seedDefaultViews gives a scope the two views every scope wants: everything,
+// and epics only. projectID nil means the cross-project scope. Shared by seed()
+// and CreateProject so a new project is usable the moment it exists.
+func (s *Store) seedDefaultViews(ctx context.Context, projectID *int64) error {
+	statuses, err := s.ListStatuses(ctx)
 	if err != nil {
 		return err
 	}
-	if have > 0 {
-		return nil
+	statusIDs := make([]int64, 0, len(statuses))
+	for _, st := range statuses {
+		statusIDs = append(statusIDs, st.ID)
 	}
-	rows, err := s.db.Query(`SELECT key FROM ticket`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	max := 0
-	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err != nil {
+
+	for i, b := range []struct{ name, slug, ftype string }{
+		{"All", "all-work", "any"},
+		{"Epics", "epics", TypeEpic},
+	} {
+		created, err := s.CreateBoard(ctx, Board{
+			Name: b.name, Slug: b.slug, FilterType: b.ftype,
+			Position: i + 1, ProjectID: projectID,
+		})
+		if err != nil {
 			return err
 		}
-		if n, ok := parseTicketKey(k); ok && n > max {
-			max = n
+		if err := s.SetBoardColumns(ctx, created.ID, statusIDs); err != nil {
+			return err
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	_, err = s.db.Exec(
-		`INSERT INTO meta (key, value) VALUES ('ticket_seq', ?)`, fmt.Sprint(max))
-	return err
+	return nil
 }
 
 // ---- statuses ----

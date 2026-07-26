@@ -8,6 +8,18 @@ const (
 	TypeSubtask = "subtask"
 )
 
+// Project is the top-level container. Every ticket belongs to exactly one.
+type Project struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Prefix      string `json:"prefix"`
+	Color       string `json:"color"`
+	Position    int    `json:"position"`
+	CreatedAt   string `json:"created_at"`
+	TicketCount int    `json:"ticket_count"`
+}
+
 type Status struct {
 	ID       int64  `json:"id"`
 	Name     string `json:"name"`
@@ -26,6 +38,9 @@ type Label struct {
 type Ticket struct {
 	ID          int64   `json:"id"`
 	Key         string  `json:"key"`
+	ProjectID   int64   `json:"project_id"`
+	ProjectSlug string  `json:"project_slug"`
+	ProjectName string  `json:"project_name"`
 	Type        string  `json:"type"`
 	Title       string  `json:"title"`
 	Description string  `json:"description"`
@@ -48,9 +63,12 @@ type Comment struct {
 }
 
 type Board struct {
-	ID              int64   `json:"id"`
-	Name            string  `json:"name"`
-	Slug            string  `json:"slug"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	// ProjectID nil means the cross-project scope; ProjectSlug is then "all".
+	ProjectID       *int64  `json:"project_id"`
+	ProjectSlug     string  `json:"project_slug"`
 	FilterType      string  `json:"filter_type"`
 	FilterLabelMode string  `json:"filter_label_mode"`
 	FilterLabels    []Label `json:"filter_labels"`
@@ -80,6 +98,8 @@ type BoardView struct {
 
 // TicketFilter drives both the list endpoint and board assembly.
 type TicketFilter struct {
+	// ProjectID nil means every project - the cross-project scope.
+	ProjectID *int64
 	Type      string // epic|task|subtask|any|"" (empty means any)
 	StatusID  int64
 	LabelIDs  []int64
