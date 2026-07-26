@@ -1,6 +1,11 @@
 module github.com/dv310p3r/geet
 
-go 1.26.5
+// Kept below the local toolchain on purpose so the project stays buildable a
+// few releases back. 1.25 is the floor the SQLite driver requires, not a
+// preference of ours.
+go 1.25.0
+
+require modernc.org/sqlite v1.54.0
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -12,5 +17,4 @@ require (
 	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.54.0 // indirect
 )

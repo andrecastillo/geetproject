@@ -1,0 +1,16 @@
+services:
+  geet:
+    build: .
+    image: geet:latest
+    container_name: geet
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      # Unraid's default nobody:users. Change to match your host user when
+      # running somewhere else.
+      PUID: "99"
+      PGID: "100"
+      TZ: "America/New_York"
+    restart: unless-stopped

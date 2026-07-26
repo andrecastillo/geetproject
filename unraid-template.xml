@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>geet</Name>
+  <Repository>ghcr.io/dv310p3r/geet:latest</Repository>
+  <Registry>https://ghcr.io/dv310p3r/geet</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/dv310p3r/geet/issues</Support>
+  <Project>https://github.com/dv310p3r/geet</Project>
+  <Overview>
+    A small, self-hosted kanban issue tracker for one person.
+
+    Tickets nest three levels deep (epic &gt; task &gt; sub-task). Boards are saved
+    filters over a single pool of tickets, so the same ticket can appear on an
+    epics board and a team board without being duplicated. Sub-tasks render
+    inside their parent's card while they share its status, and break out onto
+    their own card when they don't.
+
+    Single Go binary with the web UI compiled in. Data is one SQLite file in
+    /data. No account, no cloud, no external services.
+  </Overview>
+  <Category>Productivity: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/dv310p3r/geet/main/web/public/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <DonateText/>
+  <DonateLink/>
+  <Description>
+    A small, self-hosted kanban issue tracker for one person. Epics, tasks and
+    sub-tasks, boards as saved filters, markdown descriptions and comments.
+    One binary, one SQLite file.
+  </Description>
+
+  <Config Name="WebUI Port" Target="8080" Default="8080" Mode="tcp"
+          Description="Port for the web interface." Type="Port" Display="always"
+          Required="true" Mask="false">8080</Config>
+
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/geet" Mode="rw"
+          Description="Holds geet.db, the entire database. Back this up."
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/geet</Config>
+
+  <Config Name="PUID" Target="PUID" Default="99" Mode=""
+          Description="User ID that owns the database file. Unraid default is 99 (nobody)."
+          Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+
+  <Config Name="PGID" Target="PGID" Default="100" Mode=""
+          Description="Group ID that owns the database file. Unraid default is 100 (users)."
+          Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+
+  <Config Name="TZ" Target="TZ" Default="America/New_York" Mode=""
+          Description="Timezone used for timestamps."
+          Type="Variable" Display="advanced" Required="false" Mask="false">America/New_York</Config>
+</Container>

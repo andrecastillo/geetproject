@@ -15,37 +15,41 @@ import (
 
 	geet "github.com/dv310p3r/geet"
 	"github.com/dv310p3r/geet/internal/api"
+	"github.com/dv310p3r/geet/internal/cli"
 	"github.com/dv310p3r/geet/internal/store"
 )
 
-const usage = `geet - a self-hosted kanban issue tracker
-
-Usage:
-  geet serve [--addr :8080] [--db /data/geet.db]
-
-Environment:
+const usage = cli.Usage + `
+Server environment:
   GEET_ADDR   listen address (default :8080)
   GEET_DB     path to the SQLite file (default ./geet.db, /data/geet.db in the container)
+  GEET_URL    server the CLI talks to (default http://localhost:8080)
 `
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
-	log.SetPrefix("geet: ")
-
 	if len(os.Args) < 2 {
 		fmt.Print(usage)
 		os.Exit(2)
 	}
 	switch os.Args[1] {
 	case "serve":
+		log.SetFlags(log.LstdFlags | log.Lmsgprefix)
+		log.SetPrefix("geet: ")
 		if err := serve(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], usage)
-		os.Exit(2)
+		// Everything else is a CLI command against a running server.
+		if err := cli.Run(os.Args[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				fmt.Print(usage)
+				os.Exit(2)
+			}
+			fmt.Fprintf(os.Stderr, "geet: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 
