@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	geet "github.com/dv310p3r/geet"
-	"github.com/dv310p3r/geet/internal/api"
-	"github.com/dv310p3r/geet/internal/cli"
-	"github.com/dv310p3r/geet/internal/store"
+	geet "github.com/andrecastillo/geet"
+	"github.com/andrecastillo/geet/internal/api"
+	"github.com/andrecastillo/geet/internal/cli"
+	"github.com/andrecastillo/geet/internal/store"
 )
 
 const usage = cli.Usage + `

@@ -1,4 +1,4 @@
-module github.com/dv310p3r/geet
+module github.com/andrecastillo/geet
 
 // Kept below the local toolchain on purpose so the project stays buildable a
 // few releases back. 1.25 is the floor the SQLite driver requires, not a

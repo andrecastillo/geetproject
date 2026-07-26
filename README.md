@@ -56,7 +56,7 @@ docker run -d --name geet \
   -p 8080:8080 \
   -v /mnt/user/appdata/geet:/data \
   -e PUID=99 -e PGID=100 \
-  ghcr.io/dv310p3r/geet:latest
+  ghcr.io/andrecastillo/geet:latest
 ```
 
 Then open `http://<host>:8080`. On Unraid, `unraid-template.xml` in this repo

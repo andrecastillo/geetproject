@@ -1,14 +1,14 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>geet</Name>
-  <Repository>ghcr.io/dv310p3r/geet:latest</Repository>
-  <Registry>https://ghcr.io/dv310p3r/geet</Registry>
+  <Repository>ghcr.io/andrecastillo/geet:latest</Repository>
+  <Registry>https://ghcr.io/andrecastillo/geet</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/dv310p3r/geet/issues</Support>
-  <Project>https://github.com/dv310p3r/geet</Project>
+  <Support>https://github.com/andrecastillo/geet/issues</Support>
+  <Project>https://github.com/andrecastillo/geet</Project>
   <Overview>
     A small, self-hosted kanban issue tracker for one person.
 
@@ -23,7 +23,7 @@
   </Overview>
   <Category>Productivity: Tools:</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <Icon>https://raw.githubusercontent.com/dv310p3r/geet/main/web/public/icon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/andrecastillo/geet/main/web/public/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <DonateText/>

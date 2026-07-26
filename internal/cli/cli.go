@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dv310p3r/geet/internal/store"
+	"github.com/andrecastillo/geet/internal/store"
 )
 
 const Usage = `Usage: geet <command> [flags]
