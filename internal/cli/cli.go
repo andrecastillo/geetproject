@@ -23,22 +23,29 @@ const Usage = `Usage: geet <command> [flags]
 Server:
   serve                          run the web UI and API
 
+Projects:
+  projects                       list projects with ticket counts
+  project   new NAME [--prefix MAI] [--color '#60a5fa']
+  project   rm SLUG [--force]    deletes its tickets too
+
 Tickets:
-  ls        [--type T] [--status S] [--label L] [--parent KEY] [--search Q]
-  new       "title" [--type task|epic|subtask] [--parent KEY] [--status S]
-                    [--label NAME]... [--desc-file FILE]
+  ls        [--project P] [--type T] [--status S] [--label L] [--parent KEY] [--search Q]
+  new       "title" [--project P] [--type task|epic|subtask] [--parent KEY]
+                    [--status S] [--label NAME]... [--desc-file FILE]
   show      KEY
-  edit      KEY [--title T] [--status S] [--desc-file FILE] [--parent KEY] [--type T]
+  edit      KEY [--title T] [--status S] [--desc-file FILE] [--parent KEY]
+                [--project P] [--type T]
   rm        KEY [--force]
   comment   KEY "body"
 
-Boards:
-  boards                         list boards
-  board     SLUG                 show a board's columns and cards
+Views:
+  boards    [--project P]        views in a scope ('all' for cross-project)
+  board     SCOPE VIEW           a view's columns and cards, e.g. geet board mai epics
 
 Common flags:
-  --server URL   geet server (default $GEET_URL, else http://localhost:8080)
-  --json         raw JSON instead of formatted output
+  --server URL    geet server (default $GEET_URL, else http://localhost:8080)
+  --project P     project slug (default $GEET_PROJECT); 'all' means every project
+  --json          raw JSON instead of formatted output
 `
 
 type client struct {
@@ -101,12 +108,15 @@ func Run(args []string) error {
 	asJSON := fs.Bool("json", false, "raw JSON output")
 
 	var (
+		project    = fs.String("project", os.Getenv("GEET_PROJECT"), "project slug")
 		ticketType = fs.String("type", "", "ticket type: epic, task or subtask")
 		status     = fs.String("status", "", "status slug")
 		parent     = fs.String("parent", "", "parent ticket key")
 		search     = fs.String("search", "", "match title or description")
 		title      = fs.String("title", "", "new title")
 		descFile   = fs.String("desc-file", "", "read the description from a file ('-' for stdin)")
+		prefix     = fs.String("prefix", "", "ticket key prefix for a new project")
+		color      = fs.String("color", "", "project colour, e.g. '#60a5fa'")
 		force      = fs.Bool("force", false, "skip the confirmation prompt")
 		labels     multiFlag
 	)
@@ -137,13 +147,30 @@ func Run(args []string) error {
 	}
 
 	switch cmd {
+	case "projects":
+		return c.projects(*asJSON)
+	case "project":
+		switch arg(0) {
+		case "new":
+			if arg(1) == "" {
+				return fmt.Errorf(`project new needs a name: geet project new "mai"`)
+			}
+			return c.createProject(arg(1), *prefix, *color, *asJSON)
+		case "rm":
+			if arg(1) == "" {
+				return fmt.Errorf("project rm needs a slug")
+			}
+			return c.removeProject(arg(1), *force)
+		default:
+			return fmt.Errorf("project takes 'new' or 'rm'")
+		}
 	case "ls":
-		return c.list(*ticketType, *status, *parent, *search, labels, *asJSON)
+		return c.list(*project, *ticketType, *status, *parent, *search, labels, *asJSON)
 	case "new":
 		if arg(0) == "" {
 			return fmt.Errorf(`new needs a title: geet new "Fix the thing"`)
 		}
-		return c.create(arg(0), *ticketType, *parent, *status, *descFile, labels, *asJSON)
+		return c.create(arg(0), *project, *ticketType, *parent, *status, *descFile, labels, *asJSON)
 	case "show":
 		if arg(0) == "" {
 			return fmt.Errorf("show needs a ticket key, e.g. geet show T-12")
@@ -153,7 +180,7 @@ func Run(args []string) error {
 		if arg(0) == "" {
 			return fmt.Errorf("edit needs a ticket key")
 		}
-		return c.edit(arg(0), *title, *status, *ticketType, *parent, *descFile, fs, *asJSON)
+		return c.edit(arg(0), *title, *status, *ticketType, *parent, *project, *descFile, fs, *asJSON)
 	case "rm":
 		if arg(0) == "" {
 			return fmt.Errorf("rm needs a ticket key")
@@ -165,15 +192,27 @@ func Run(args []string) error {
 		}
 		return c.comment(arg(0), arg(1), *asJSON)
 	case "boards":
-		return c.boards(*asJSON)
+		return c.boards(scopeOr(*project), *asJSON)
 	case "board":
 		if arg(0) == "" {
-			return fmt.Errorf("board needs a slug, e.g. geet board tasks")
+			return fmt.Errorf("board needs a scope and a view, e.g. geet board mai epics")
 		}
-		return c.board(arg(0), *asJSON)
+		// `geet board mai epics`, or `geet board epics` with --project set.
+		if arg(1) == "" {
+			return c.board(scopeOr(*project), arg(0), *asJSON)
+		}
+		return c.board(arg(0), arg(1), *asJSON)
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
+}
+
+// scopeOr defaults an unset --project to the cross-project scope.
+func scopeOr(project string) string {
+	if project == "" {
+		return "all"
+	}
+	return project
 }
 
 type multiFlag []string
@@ -235,8 +274,11 @@ func readDescription(path string) (string, error) {
 	return string(b), err
 }
 
-func (c *client) list(ticketType, status, parent, search string, labels multiFlag, asJSON bool) error {
+func (c *client) list(project, ticketType, status, parent, search string, labels multiFlag, asJSON bool) error {
 	q := []string{}
+	if project != "" {
+		q = append(q, "project="+project)
+	}
 	if ticketType != "" {
 		q = append(q, "type="+ticketType)
 	}
@@ -277,7 +319,8 @@ func (c *client) list(ticketType, status, parent, search string, labels multiFla
 		return nil
 	}
 	for _, t := range tickets {
-		fmt.Printf("%-6s %-8s %-13s %s\n", t.Key, t.Type, statusName(t), t.Title)
+		fmt.Printf("%-9s %-9s %-8s %-13s %s\n",
+			t.Key, t.ProjectSlug, t.Type, statusName(t), t.Title)
 	}
 	return nil
 }
@@ -289,7 +332,7 @@ func statusName(t store.Ticket) string {
 	return t.Status.Name
 }
 
-func (c *client) create(title, ticketType, parent, status, descFile string, labels multiFlag, asJSON bool) error {
+func (c *client) create(title, project, ticketType, parent, status, descFile string, labels multiFlag, asJSON bool) error {
 	desc, err := readDescription(descFile)
 	if err != nil {
 		return err
@@ -304,6 +347,13 @@ func (c *client) create(title, ticketType, parent, status, descFile string, labe
 	body := map[string]any{
 		"type": ticketType, "title": title, "description": desc,
 		"status": status, "parent": parent, "label_ids": ids,
+	}
+	// A child inherits its parent's project, so only send one when standing alone.
+	if parent == "" {
+		if project == "" {
+			return fmt.Errorf("a ticket needs a project: pass --project, or set GEET_PROJECT")
+		}
+		body["project"] = project
 	}
 	var t store.Ticket
 	if err := c.do("POST", "/api/tickets", body, &t); err != nil {
@@ -332,7 +382,7 @@ func (c *client) show(key string, asJSON bool) error {
 		return dumpJSON(d)
 	}
 	fmt.Printf("%s  %s\n", d.Key, d.Title)
-	fmt.Printf("%s · %s", d.Type, statusName(d.Ticket))
+	fmt.Printf("%s · %s · %s", d.ProjectSlug, d.Type, statusName(d.Ticket))
 	if d.ParentKey != "" {
 		fmt.Printf(" · in %s %s", d.ParentKey, d.ParentTitle)
 	}
@@ -362,7 +412,7 @@ func (c *client) show(key string, asJSON bool) error {
 	return nil
 }
 
-func (c *client) edit(key, title, status, ticketType, parent, descFile string, fs *flag.FlagSet, asJSON bool) error {
+func (c *client) edit(key, title, status, ticketType, parent, project, descFile string, fs *flag.FlagSet, asJSON bool) error {
 	// Only send what was actually passed. Sending everything would blank the
 	// fields the user left out.
 	patch := map[string]any{}
@@ -381,6 +431,9 @@ func (c *client) edit(key, title, status, ticketType, parent, descFile string, f
 	if set["parent"] {
 		patch["parent"] = parent
 	}
+	if set["project"] {
+		patch["project"] = project
+	}
 	if set["desc-file"] {
 		desc, err := readDescription(descFile)
 		if err != nil {
@@ -389,7 +442,7 @@ func (c *client) edit(key, title, status, ticketType, parent, descFile string, f
 		patch["description"] = desc
 	}
 	if len(patch) == 0 {
-		return fmt.Errorf("nothing to change; pass --title, --status, --type, --parent or --desc-file")
+		return fmt.Errorf("nothing to change; pass --title, --status, --type, --parent, --project or --desc-file")
 	}
 
 	var t store.Ticket
@@ -440,9 +493,9 @@ func (c *client) comment(key, body string, asJSON bool) error {
 	return nil
 }
 
-func (c *client) boards(asJSON bool) error {
+func (c *client) boards(scope string, asJSON bool) error {
 	var bs []store.Board
-	if err := c.do("GET", "/api/boards", nil, &bs); err != nil {
+	if err := c.do("GET", "/api/projects/"+scope+"/boards", nil, &bs); err != nil {
 		return err
 	}
 	if asJSON {
@@ -467,9 +520,9 @@ func (c *client) boards(asJSON bool) error {
 	return nil
 }
 
-func (c *client) board(slug string, asJSON bool) error {
+func (c *client) board(scope, slug string, asJSON bool) error {
 	var v store.BoardView
-	if err := c.do("GET", "/api/boards/"+slug, nil, &v); err != nil {
+	if err := c.do("GET", "/api/projects/"+scope+"/boards/"+slug, nil, &v); err != nil {
 		return err
 	}
 	if asJSON {
@@ -489,5 +542,72 @@ func (c *client) board(slug string, asJSON bool) error {
 			}
 		}
 	}
+	return nil
+}
+
+// ---- projects ----
+
+func (c *client) projects(asJSON bool) error {
+	var ps []store.Project
+	if err := c.do("GET", "/api/projects", nil, &ps); err != nil {
+		return err
+	}
+	if asJSON {
+		return dumpJSON(ps)
+	}
+	if len(ps) == 0 {
+		fmt.Println("No projects yet. Create one with: geet project new \"mai\"")
+		return nil
+	}
+	for _, p := range ps {
+		fmt.Printf("%-14s %-8s %4d ticket(s)  %s\n", p.Slug, p.Prefix, p.TicketCount, p.Name)
+	}
+	return nil
+}
+
+func (c *client) createProject(name, prefix, color string, asJSON bool) error {
+	body := map[string]any{"name": name}
+	if prefix != "" {
+		body["prefix"] = prefix
+	}
+	if color != "" {
+		body["color"] = color
+	}
+	var p store.Project
+	if err := c.do("POST", "/api/projects", body, &p); err != nil {
+		return err
+	}
+	if asJSON {
+		return dumpJSON(p)
+	}
+	fmt.Printf("%s  %s  keys look like %s-1\n", p.Slug, p.Name, p.Prefix)
+	return nil
+}
+
+func (c *client) removeProject(slug string, force bool) error {
+	var p store.Project
+	if err := c.do("GET", "/api/projects/"+slug, nil, &p); err != nil {
+		return err
+	}
+	if !force {
+		extra := ""
+		if p.TicketCount > 0 {
+			extra = fmt.Sprintf(" and its %d ticket(s)", p.TicketCount)
+		}
+		fmt.Printf("Delete project %q%s? This cannot be undone. [y/N] ", p.Name, extra)
+		var answer string
+		fmt.Scanln(&answer)
+		if !strings.EqualFold(strings.TrimSpace(answer), "y") {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+	var res struct {
+		DeletedTickets int `json:"deleted_tickets"`
+	}
+	if err := c.do("DELETE", "/api/projects/"+slug, nil, &res); err != nil {
+		return err
+	}
+	fmt.Printf("Deleted project %s and %d ticket(s)\n", slug, res.DeletedTickets)
 	return nil
 }

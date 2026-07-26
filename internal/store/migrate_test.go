@@ -216,6 +216,16 @@ func TestMigrateFromV1(t *testing.T) {
 		t.Fatalf("want 4 columns preserved, got %d", len(view.Columns))
 	}
 
+	// The migrated project must have usable views of its own, or selecting it in
+	// the sidebar would show a blank page.
+	projectViews, err := s.ListBoards(ctx, "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projectViews) == 0 {
+		t.Error("the migrated project has no views, so it would render empty")
+	}
+
 	// The counter continues from the highest migrated key rather than restarting.
 	next, err := s.CreateTicket(ctx, NewTicket{
 		ProjectSlug: "general", Type: TypeTask, Title: "after migration"})

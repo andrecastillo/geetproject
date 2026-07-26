@@ -8,6 +8,7 @@ export const columnDroppableId = (slug: string) => `col:${slug}`
 interface Props {
   column: Column
   statuses: Status[]
+  showProject?: boolean
   onOpen: (key: string) => void
   onStatusChange: (key: string, statusSlug: string) => void
   onDelete: (key: string) => void
@@ -16,6 +17,7 @@ interface Props {
 export default function BoardColumn({
   column,
   statuses,
+  showProject,
   onOpen,
   onStatusChange,
   onDelete,
@@ -44,6 +46,7 @@ export default function BoardColumn({
               key={card.key}
               card={card}
               statuses={statuses}
+              showProject={showProject}
               onOpen={onOpen}
               onStatusChange={onStatusChange}
               onDelete={onDelete}

@@ -10,46 +10,70 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove } from '@dnd-kit/sortable'
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import { useApp } from '../App'
-import { api, type BoardView, type Card } from '../api'
+import { ALL_SCOPE, api, type Board, type BoardView, type Card } from '../api'
 import BoardColumn, { columnDroppableId } from '../components/BoardColumn'
 import NewTicketDialog from '../components/NewTicketDialog'
+import ScopeSettings from '../components/ScopeSettings'
 import TicketModal from '../components/TicketModal'
 import { CardBody } from '../components/TicketCard'
 
 export default function BoardPage() {
-  const { slug, key } = useParams()
-  const { boards, statuses, labels, fail } = useApp()
+  const { scope = ALL_SCOPE, view: viewSlug, key } = useParams()
+  const { projects, statuses, labels, fail } = useApp()
   const navigate = useNavigate()
 
-  const [view, setView] = useState<BoardView | null>(null)
+  const [views, setViews] = useState<Board[]>([])
+  const [board, setBoard] = useState<BoardView | null>(null)
   const [draggingKey, setDraggingKey] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  const project = projects.find((p) => p.slug === scope)
+  const isAll = scope === ALL_SCOPE
+  const scopeName = isAll ? 'All projects' : (project?.name ?? scope)
 
   // A pointer must travel a few pixels before a drag starts, otherwise every
   // click on a title or a status dropdown would be swallowed by the sensor.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
+  const loadViews = useCallback(async () => {
+    try {
+      setViews(await api.boards(scope))
+    } catch (e) {
+      fail(e)
+      setViews([])
+    }
+  }, [scope, fail])
+
   useEffect(() => {
-    if (!slug && boards.length > 0) navigate(`/b/${boards[0].slug}`, { replace: true })
-  }, [slug, boards, navigate])
+    void loadViews()
+  }, [loadViews])
+
+  // Landing on a scope with no view named picks its first one.
+  useEffect(() => {
+    if (!viewSlug && views.length > 0) {
+      navigate(`/p/${scope}/b/${views[0].slug}`, { replace: true })
+    }
+  }, [viewSlug, views, scope, navigate])
 
   const reload = useCallback(async () => {
-    if (!slug) return
+    if (!viewSlug) return
     try {
-      setView(await api.board(slug))
+      setBoard(await api.board(scope, viewSlug))
     } catch (e) {
       fail(e)
     }
-  }, [slug, fail])
+  }, [scope, viewSlug, fail])
 
   useEffect(() => {
+    setBoard(null)
     void reload()
   }, [reload])
 
-  const openTicket = (k: string) => navigate(`/b/${slug}/t/${k}`)
-  const closeTicket = () => navigate(`/b/${slug}`)
+  const openTicket = (k: string) => navigate(`/p/${scope}/b/${viewSlug}/t/${k}`)
+  const closeTicket = () => navigate(`/p/${scope}/b/${viewSlug}`)
 
   const changeStatus = async (ticketKey: string, statusSlug: string) => {
     try {
@@ -83,17 +107,17 @@ export default function BoardPage() {
   const onDragEnd = async (e: DragEndEvent) => {
     setDraggingKey(null)
     const { active, over } = e
-    if (!over || !view) return
+    if (!over || !board) return
 
     const movedKey = String(active.id)
     const overId = String(over.id)
-    const source = view.columns.find((c) => c.cards.some((x) => x.key === movedKey))
+    const source = board.columns.find((c) => c.cards.some((x) => x.key === movedKey))
     if (!source) return
 
-    let target = view.columns.find((c) => columnDroppableId(c.status.slug) === overId)
+    let target = board.columns.find((c) => columnDroppableId(c.status.slug) === overId)
     let overCardKey = ''
     if (!target) {
-      target = view.columns.find((c) => c.cards.some((x) => x.key === overId))
+      target = board.columns.find((c) => c.cards.some((x) => x.key === overId))
       overCardKey = overId
     }
     if (!target) return
@@ -121,84 +145,115 @@ export default function BoardPage() {
     try {
       // The server returns the reassembled board. Letting it decide is what
       // keeps nesting and break-out correct without duplicating that rule here.
-      setView(await api.move(movedKey, view.slug, target.status.slug, after))
+      setBoard(await api.move(movedKey, scope, board.slug, target.status.slug, after))
     } catch (err) {
       fail(err)
       await reload()
     }
   }
 
-  if (!slug) return <div className="center-note">No boards yet.</div>
-  if (!view) return <div className="center-note">Loading board…</div>
+  if (!isAll && projects.length === 0) {
+    return (
+      <div className="center-note">
+        No projects yet. Create one from the sidebar — tickets have to live somewhere.
+      </div>
+    )
+  }
 
-  const draggedCard: Card | undefined = draggingKey
-    ? view.columns.flatMap((c) => c.cards).find((c) => c.key === draggingKey)
-    : undefined
+  const draggedCard: Card | undefined =
+    draggingKey && board
+      ? board.columns.flatMap((c) => c.cards).find((c) => c.key === draggingKey)
+      : undefined
 
   const noop = () => {}
 
   return (
     <>
-      <div className="topbar" style={{ borderBottom: 'none', paddingBottom: 0 }}>
-        <strong>{view.name}</strong>
-        <span className="muted">
-          {view.filter_type === 'any' ? 'all ticket types' : `${view.filter_type}s only`}
-          {view.filter_labels.length > 0 &&
-            ` · ${view.filter_label_mode === 'all' ? 'all of' : 'any of'} ${view.filter_labels
-              .map((l) => l.name)
-              .join(', ')}`}
-        </span>
+      <div className="scope-head">
+        <div className="scope-title">
+          {!isAll && project && (
+            <span className="dot" style={{ background: project.color || '#6b7383' }} />
+          )}
+          <strong>{scopeName}</strong>
+          {!isAll && project && <span className="p-prefix">{project.prefix}</span>}
+        </div>
+
+        <nav className="view-tabs">
+          {views.map((v) => (
+            <NavLink
+              key={v.slug}
+              to={`/p/${scope}/b/${v.slug}`}
+              className={({ isActive }) => 'view-tab' + (isActive ? ' active' : '')}
+            >
+              {v.name}
+            </NavLink>
+          ))}
+        </nav>
+
         <span className="spacer" />
+        <button className="ghost" onClick={() => setSettingsOpen(true)}>
+          Views &amp; labels
+        </button>
         <button className="primary" onClick={() => setCreating(true)}>
           + New ticket
         </button>
       </div>
 
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCorners}
-        onDragStart={onDragStart}
-        onDragEnd={onDragEnd}
-      >
-        <div className="board">
-          {view.columns.map((col) => (
-            <BoardColumn
-              key={col.status.id}
-              column={col}
-              statuses={statuses}
-              onOpen={openTicket}
-              onStatusChange={changeStatus}
-              onDelete={deleteTicket}
-            />
-          ))}
-          {view.columns.length === 0 && (
-            <div className="center-note">
-              This board has no columns. Add some under “Boards &amp; labels”.
-            </div>
-          )}
+      {!board ? (
+        <div className="center-note">
+          {views.length === 0 ? 'This scope has no views yet.' : 'Loading board…'}
         </div>
-
-        <DragOverlay>
-          {draggedCard && (
-            <div className="card" style={{ cursor: 'grabbing' }}>
-              <CardBody
-                card={draggedCard}
+      ) : (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+        >
+          <div className="board">
+            {board.columns.map((col) => (
+              <BoardColumn
+                key={col.status.id}
+                column={col}
                 statuses={statuses}
-                onOpen={noop}
-                onStatusChange={noop}
-                onDelete={noop}
+                showProject={isAll}
+                onOpen={openTicket}
+                onStatusChange={changeStatus}
+                onDelete={deleteTicket}
               />
-            </div>
-          )}
-        </DragOverlay>
-      </DndContext>
+            ))}
+            {board.columns.length === 0 && (
+              <div className="center-note">
+                This view has no columns. Add some under “Views &amp; labels”.
+              </div>
+            )}
+          </div>
+
+          <DragOverlay>
+            {draggedCard && (
+              <div className="card" style={{ cursor: 'grabbing' }}>
+                <CardBody
+                  card={draggedCard}
+                  statuses={statuses}
+                  showProject={isAll}
+                  onOpen={noop}
+                  onStatusChange={noop}
+                  onDelete={noop}
+                />
+              </div>
+            )}
+          </DragOverlay>
+        </DndContext>
+      )}
 
       {creating && (
         <NewTicketDialog
+          projects={projects}
           statuses={statuses}
           labels={labels}
-          defaultType={view.filter_type === 'any' ? 'task' : view.filter_type}
-          defaultLabelIds={view.filter_labels.map((l) => l.id)}
+          defaultProject={isAll ? '' : scope}
+          defaultType={board?.filter_type === 'any' || !board ? 'task' : board.filter_type}
+          defaultLabelIds={board?.filter_labels.map((l) => l.id) ?? []}
           onClose={() => setCreating(false)}
           onCreated={async () => {
             setCreating(false)
@@ -211,6 +266,7 @@ export default function BoardPage() {
       {key && (
         <TicketModal
           ticketKey={key}
+          projects={projects}
           statuses={statuses}
           labels={labels}
           onClose={closeTicket}
@@ -218,6 +274,18 @@ export default function BoardPage() {
           onChanged={reload}
           onDelete={deleteTicket}
           onError={fail}
+        />
+      )}
+
+      {settingsOpen && (
+        <ScopeSettings
+          scope={scope}
+          views={views}
+          onClose={() => setSettingsOpen(false)}
+          onViewsChanged={async () => {
+            await loadViews()
+            await reload()
+          }}
         />
       )}
     </>

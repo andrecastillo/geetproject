@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { api, type Label, type Status, type TicketDetail } from '../api'
+import { api, type Label, type Project, type Status, type TicketDetail } from '../api'
 import LabelPicker from './LabelPicker'
 import NewTicketDialog from './NewTicketDialog'
 import { StatusSelect } from './TicketCard'
 
 interface Props {
   ticketKey: string
+  projects: Project[]
   statuses: Status[]
   labels: Label[]
   onClose: () => void
@@ -19,6 +20,7 @@ interface Props {
 
 export default function TicketModal({
   ticketKey,
+  projects,
   statuses,
   labels,
   onClose,
@@ -117,6 +119,45 @@ export default function TicketModal({
             onBlur={() => title.trim() && title !== t.title && void patch({ title: title.trim() })}
             style={{ fontSize: 18, fontWeight: 600 }}
           />
+        </div>
+
+        <div className="field">
+          <label>
+            Project
+            {t.children.length > 0 && ` \u2014 moving this also moves ${t.children.length} child ticket${
+              t.children.length === 1 ? '' : 's'
+            }`}
+          </label>
+          <select
+            value={t.project_slug}
+            disabled={!!t.parent_key}
+            title={
+              t.parent_key
+                ? `A ticket lives in its parent's project. Move ${t.parent_key} instead.`
+                : undefined
+            }
+            onChange={(e) => {
+              const target = projects.find((p) => p.slug === e.target.value)
+              if (!target) return
+              if (
+                t.children.length > 0 &&
+                !window.confirm(
+                  `Move ${t.key} and its ${t.children.length} child ticket${
+                    t.children.length === 1 ? '' : 's'
+                  } to ${target.name}?`,
+                )
+              ) {
+                return
+              }
+              void patch({ project: target.slug })
+            }}
+          >
+            {projects.map((p) => (
+              <option key={p.slug} value={p.slug}>
+                {p.name}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="field">
@@ -251,8 +292,10 @@ export default function TicketModal({
 
         {addingChild && childType && (
           <NewTicketDialog
+            projects={projects}
             statuses={statuses}
             labels={labels}
+            defaultProject={t.project_slug}
             defaultType={childType}
             defaultParent={t.key}
             lockType

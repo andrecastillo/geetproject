@@ -1,10 +1,12 @@
 import { useState } from 'react'
-import { api, type Label, type Status, type TicketType } from '../api'
+import { api, type Label, type Project, type Status, type TicketType } from '../api'
 import LabelPicker from './LabelPicker'
 
 interface Props {
+  projects: Project[]
   statuses: Status[]
   labels: Label[]
+  defaultProject: string
   defaultType: TicketType
   defaultLabelIds?: number[]
   defaultParent?: string
@@ -15,8 +17,10 @@ interface Props {
 }
 
 export default function NewTicketDialog({
+  projects,
   statuses,
   labels,
+  defaultProject,
   defaultType,
   defaultLabelIds = [],
   defaultParent = '',
@@ -26,6 +30,9 @@ export default function NewTicketDialog({
   onError,
 }: Props) {
   const [type, setType] = useState<TicketType>(defaultType)
+  // On a cross-project board there is no scope to default to, so the field
+  // starts empty and has to be chosen.
+  const [project, setProject] = useState(defaultProject || projects[0]?.slug || '')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState(statuses[0]?.slug ?? '')
@@ -33,11 +40,16 @@ export default function NewTicketDialog({
   const [labelIds, setLabelIds] = useState<number[]>(defaultLabelIds)
   const [busy, setBusy] = useState(false)
 
+  const canSubmit = title.trim() !== '' && (project !== '' || parent.trim() !== '')
+
   const submit = async () => {
-    if (!title.trim()) return
+    if (!canSubmit) return
     setBusy(true)
     try {
       await api.createTicket({
+        // A child always inherits its parent's project, so the server works it
+        // out and sending one here would only be a chance to disagree.
+        project: parent.trim() ? undefined : project,
         type,
         title: title.trim(),
         description,
@@ -56,6 +68,20 @@ export default function NewTicketDialog({
     <div className="backdrop" onClick={onClose}>
       <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
         <h2>New ticket</h2>
+
+        {!parent.trim() && (
+          <div className="field">
+            <label>Project</label>
+            <select value={project} onChange={(e) => setProject(e.target.value)}>
+              <option value="">Choose a project…</option>
+              {projects.map((p) => (
+                <option key={p.slug} value={p.slug}>
+                  {p.name} ({p.prefix})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="field">
           <label>Title</label>
@@ -100,6 +126,7 @@ export default function NewTicketDialog({
           <div className="field">
             <label>
               Parent {type === 'subtask' ? '(required — a task key)' : '(optional — an epic key)'}
+              {parent.trim() ? ' — the ticket joins its parent\u2019s project' : ''}
             </label>
             <input
               type="text"
@@ -124,7 +151,7 @@ export default function NewTicketDialog({
           <button className="ghost" onClick={onClose}>
             Cancel
           </button>
-          <button className="primary" disabled={busy || !title.trim()} onClick={() => void submit()}>
+          <button className="primary" disabled={busy || !canSubmit} onClick={() => void submit()}>
             Create
           </button>
         </div>

@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, NavLink, Outlet, useLocation, useOutletContext } from 'react-router-dom'
-import { api, type Board, type Label, type Status } from './api'
-import BoardSettings from './components/BoardSettings'
+import { Link, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom'
+import { ALL_SCOPE, api, type Label, type Project, type Status } from './api'
+import NewProjectDialog from './components/NewProjectDialog'
+import Sidebar from './components/Sidebar'
 
 export interface AppCtx {
-  boards: Board[]
+  projects: Project[]
   statuses: Status[]
   labels: Label[]
-  reloadBoards: () => Promise<void>
+  scope: string
+  reloadProjects: () => Promise<void>
   reloadLabels: () => Promise<void>
   fail: (err: unknown) => void
 }
@@ -16,21 +18,28 @@ export function useApp() {
   return useOutletContext<AppCtx>()
 }
 
+/** Remembering the last scope makes a bare visit to "/" land where you left off. */
+export const LAST_SCOPE_KEY = 'geet.lastScope'
+
 export default function App() {
-  const [boards, setBoards] = useState<Board[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [statuses, setStatuses] = useState<Status[]>([])
   const [labels, setLabels] = useState<Label[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [creatingProject, setCreatingProject] = useState(false)
   const location = useLocation()
+  const navigate = useNavigate()
+
+  // Routes are /p/:scope/b/:view/..., so the scope is the second segment.
+  const scope = location.pathname.split('/')[2] ?? ALL_SCOPE
 
   const fail = useCallback((err: unknown) => {
     setError(err instanceof Error ? err.message : String(err))
   }, [])
 
-  const reloadBoards = useCallback(async () => {
-    setBoards(await api.boards())
+  const reloadProjects = useCallback(async () => {
+    setProjects(await api.projects())
   }, [])
 
   const reloadLabels = useCallback(async () => {
@@ -38,9 +47,9 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    Promise.all([api.boards(), api.statuses(), api.labels()])
-      .then(([b, s, l]) => {
-        setBoards(b)
+    Promise.all([api.projects(), api.statuses(), api.labels()])
+      .then(([p, s, l]) => {
+        setProjects(p)
         setStatuses(s)
         setLabels(l)
       })
@@ -48,8 +57,19 @@ export default function App() {
       .finally(() => setLoading(false))
   }, [fail])
 
-  const ctx: AppCtx = { boards, statuses, labels, reloadBoards, reloadLabels, fail }
-  const currentSlug = location.pathname.split('/')[2] ?? ''
+  useEffect(() => {
+    if (scope) localStorage.setItem(LAST_SCOPE_KEY, scope)
+  }, [scope])
+
+  const ctx: AppCtx = {
+    projects,
+    statuses,
+    labels,
+    scope,
+    reloadProjects,
+    reloadLabels,
+    fail,
+  }
 
   return (
     <div className="app">
@@ -57,36 +77,40 @@ export default function App() {
         <Link to="/" className="brand">
           geet
         </Link>
-        <nav className="board-tabs">
-          {boards.map((b) => (
-            <NavLink
-              key={b.slug}
-              to={`/b/${b.slug}`}
-              className={({ isActive }) => 'board-tab' + (isActive ? ' active' : '')}
-            >
-              {b.name}
-            </NavLink>
-          ))}
-        </nav>
         <span className="spacer" />
-        <button className="ghost" onClick={() => setSettingsOpen(true)}>
-          Boards &amp; labels
-        </button>
       </div>
 
-      {error && (
-        <div className="error-banner">
-          <span style={{ flex: 1 }}>{error}</span>
-          <button className="ghost" onClick={() => setError('')}>
-            Dismiss
-          </button>
-        </div>
-      )}
+      <div className="body">
+        <Sidebar
+          projects={projects}
+          currentScope={scope}
+          onNewProject={() => setCreatingProject(true)}
+        />
 
-      {loading ? <div className="center-note">Loading…</div> : <Outlet context={ctx} />}
+        <main className="content">
+          {error && (
+            <div className="error-banner">
+              <span style={{ flex: 1 }}>{error}</span>
+              <button className="ghost" onClick={() => setError('')}>
+                Dismiss
+              </button>
+            </div>
+          )}
+          {loading ? <div className="center-note">Loading…</div> : <Outlet context={ctx} />}
+        </main>
+      </div>
 
-      {settingsOpen && (
-        <BoardSettings ctx={ctx} currentSlug={currentSlug} onClose={() => setSettingsOpen(false)} />
+      {creatingProject && (
+        <NewProjectDialog
+          existing={projects}
+          onClose={() => setCreatingProject(false)}
+          onCreated={async (p) => {
+            setCreatingProject(false)
+            await reloadProjects()
+            navigate(`/p/${p.slug}`)
+          }}
+          onError={fail}
+        />
       )}
     </div>
   )

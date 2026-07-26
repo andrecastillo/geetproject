@@ -5,18 +5,22 @@ import type { Card, Status, Ticket } from '../api'
 interface Props {
   card: Card
   statuses: Status[]
+  /** Cross-project boards need to say which project a card belongs to; inside
+   *  a single project the chip would be noise on every card. */
+  showProject?: boolean
   onOpen: (key: string) => void
   onStatusChange: (key: string, statusSlug: string) => void
   onDelete: (key: string) => void
   dragging?: boolean
 }
 
-export function CardBody({ card, statuses, onOpen, onStatusChange, onDelete }: Props) {
+export function CardBody({ card, statuses, showProject, onOpen, onStatusChange, onDelete }: Props) {
   return (
     <>
       <div className="card-top">
         <span className={`type-badge type-${card.type}`}>{card.type}</span>
         <span>{card.key}</span>
+        {showProject && <span className="project-chip">{card.project_name}</span>}
         <span className="spacer" />
         <button
           className="ghost"

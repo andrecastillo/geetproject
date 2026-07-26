@@ -308,6 +308,25 @@ func (s *Store) seed() error {
 			return fmt.Errorf("seed cross-project views: %w", err)
 		}
 	}
+
+	// Any project without views renders as a blank page. Normally CreateProject
+	// seeds them, but a project the migration invented has none, so top them up
+	// here - which also self-heals a project whose views were all deleted.
+	projects, err := s.ListProjects(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range projects {
+		views, err := s.ListBoards(ctx, p.Slug)
+		if err != nil {
+			return err
+		}
+		if len(views) == 0 {
+			if err := s.seedDefaultViews(ctx, &p.ID); err != nil {
+				return fmt.Errorf("seed views for %s: %w", p.Slug, err)
+			}
+		}
+	}
 	return nil
 }
 

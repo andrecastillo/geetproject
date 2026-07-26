@@ -2,6 +2,20 @@
 
 export type TicketType = 'epic' | 'task' | 'subtask'
 
+/** The cross-project scope, used wherever a project slug is expected. */
+export const ALL_SCOPE = 'all'
+
+export interface Project {
+  id: number
+  name: string
+  slug: string
+  prefix: string
+  color: string
+  position: number
+  created_at: string
+  ticket_count: number
+}
+
 export interface Status {
   id: number
   name: string
@@ -20,6 +34,9 @@ export interface Label {
 export interface Ticket {
   id: number
   key: string
+  project_id: number
+  project_slug: string
+  project_name: string
   type: TicketType
   title: string
   description: string
@@ -47,6 +64,9 @@ export interface Board {
   id: number
   name: string
   slug: string
+  /** null on the cross-project scope, where project_slug is "all". */
+  project_id: number | null
+  project_slug: string
   filter_type: TicketType | 'any'
   filter_label_mode: 'any' | 'all'
   filter_labels: Label[]
@@ -108,15 +128,33 @@ export const api = {
     request<Label>('POST', '/api/labels', { name, color }),
   deleteLabel: (id: number) => request<void>('DELETE', `/api/labels/${id}`),
 
-  boards: () => request<Board[]>('GET', '/api/boards'),
-  board: (slug: string) => request<BoardView>('GET', `/api/boards/${slug}`),
-  createBoard: (input: {
-    name: string
-    filter_type: string
-    filter_label_ids?: number[]
-    filter_label_mode?: string
-  }) => request<Board>('POST', '/api/boards', input),
+  projects: () => request<Project[]>('GET', '/api/projects'),
+  project: (slug: string) => request<Project>('GET', `/api/projects/${slug}`),
+  createProject: (input: { name: string; slug?: string; prefix?: string; color?: string }) =>
+    request<Project>('POST', '/api/projects', input),
+  updateProject: (
+    slug: string,
+    patch: Partial<{ name: string; prefix: string; color: string; position: number }>,
+  ) => request<Project>('PATCH', `/api/projects/${slug}`, patch),
+  deleteProject: (slug: string) =>
+    request<{ deleted_tickets: number }>('DELETE', `/api/projects/${slug}`),
+
+  // Views live under a scope: a project slug, or ALL_SCOPE. A view slug alone
+  // is not unique, so every one of these takes the scope.
+  boards: (scope: string) => request<Board[]>('GET', `/api/projects/${scope}/boards`),
+  board: (scope: string, slug: string) =>
+    request<BoardView>('GET', `/api/projects/${scope}/boards/${slug}`),
+  createBoard: (
+    scope: string,
+    input: {
+      name: string
+      filter_type: string
+      filter_label_ids?: number[]
+      filter_label_mode?: string
+    },
+  ) => request<Board>('POST', `/api/projects/${scope}/boards`, input),
   updateBoard: (
+    scope: string,
     slug: string,
     patch: Partial<{
       name: string
@@ -124,13 +162,15 @@ export const api = {
       filter_label_mode: string
       filter_label_ids: number[]
     }>,
-  ) => request<Board>('PATCH', `/api/boards/${slug}`, patch),
-  deleteBoard: (slug: string) => request<void>('DELETE', `/api/boards/${slug}`),
-  setColumns: (slug: string, status_ids: number[]) =>
-    request<BoardView>('PUT', `/api/boards/${slug}/columns`, { status_ids }),
+  ) => request<Board>('PATCH', `/api/projects/${scope}/boards/${slug}`, patch),
+  deleteBoard: (scope: string, slug: string) =>
+    request<void>('DELETE', `/api/projects/${scope}/boards/${slug}`),
+  setColumns: (scope: string, slug: string, status_ids: number[]) =>
+    request<BoardView>('PUT', `/api/projects/${scope}/boards/${slug}/columns`, { status_ids }),
 
   ticket: (key: string) => request<TicketDetail>('GET', `/api/tickets/${key}`),
   createTicket: (input: {
+    project?: string
     type: TicketType
     title: string
     description?: string
@@ -148,12 +188,13 @@ export const api = {
       type: TicketType
       status: string
       parent: string
+      project: string
       label_ids: number[]
     }>,
   ) => request<Ticket>('PATCH', `/api/tickets/${key}`, patch),
   deleteTicket: (key: string) => request<void>('DELETE', `/api/tickets/${key}`),
-  move: (key: string, board: string, status: string, after: string) =>
-    request<BoardView>('POST', `/api/tickets/${key}/move`, { board, status, after }),
+  move: (key: string, project: string, board: string, status: string, after: string) =>
+    request<BoardView>('POST', `/api/tickets/${key}/move`, { project, board, status, after }),
 
   comments: (key: string) => request<Comment[]>('GET', `/api/tickets/${key}/comments`),
   addComment: (key: string, body: string) =>

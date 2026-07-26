@@ -6,31 +6,42 @@ One Go binary with the web UI compiled into it, one SQLite file, one container.
 No account, no cloud, no external services.
 
 ```
-┌─ Todo ─────────────┐  ┌─ Done ─────────────┐
-│ ┌────────────────┐ │  │ ┌────────────────┐ │
-│ │ T-4  Login     │ │  │ │ ↳ in T-4       │ │
-│ │ [Todo      ▾]  │ │  │ │ T-6  api       │ │
-│ │ ────────────── │ │  │ │ [Done      ▾]  │ │
-│ │ ○ T-5 form     │ │  │ └────────────────┘ │
-│ │      [Todo  ▾] │ │  │                    │
-│ └────────────────┘ │  │                    │
-└────────────────────┘  └────────────────────┘
+┌──────────────┬────────────────────────────────────────────┐
+│ PROJECTS     │  All  Epics  Frontend            + New     │
+│              ├────────────────────────────────────────────┤
+│ ▸ All        │  ┌─ Todo ─────────┐  ┌─ Done ───────────┐  │
+│ ▪ mai        │  │ MAI-4  Login   │  │ ↳ in MAI-4       │  │
+│ ▸ mini-kg    │  │ [Todo      ▾]  │  │ MAI-6  api       │  │
+│              │  │ ────────────── │  │ [Done        ▾]  │  │
+│              │  │ ○ MAI-5 form   │  └──────────────────┘  │
+│ + New project│  │      [Todo  ▾] │                        │
+│              │  └────────────────┘                        │
+└──────────────┴────────────────────────────────────────────┘
 ```
+
+`MAI-5` shares its parent's status, so it nests inside the card. `MAI-6` moved to
+Done, so it broke out into a card of its own with a breadcrumb back to `MAI-4`.
 
 ## What it does
 
+- **Projects** are the top-level container, listed down the left. Every ticket
+  belongs to exactly one, and keys are per project — `MAI-1` alongside `KG-1`.
+  A pinned **All projects** scope shows everything at once, with each card
+  naming where it came from.
 - **Three levels of ticket** — epic → task → sub-task. An epic lists its tickets;
-  a task lists its sub-tasks.
-- **Boards are saved filters**, not folders. One pool of tickets; a board picks a
-  ticket type and optionally some labels. So an epic can sit on the Epics board
-  while its children sit on a team board, with nothing duplicated.
+  a task lists its sub-tasks. A child always lives in its parent's project, and
+  moving a ticket moves its whole subtree.
+- **Views are saved filters** within a project, shown as tabs. A view picks a
+  ticket type and optionally some labels, so "just the epics in mai" or "tasks
+  labelled frontend" are ordinary views. Every project gets **All** and **Epics**
+  to start with.
 - **Sub-tasks nest, then break out.** A sub-task renders as a row inside its
   parent's card while it shares the parent's status, and becomes a card of its
   own — carrying a `↳ in T-4` breadcrumb — the moment its status differs.
 - **Columns are per board**, each mapped to one global status, so "done" means
   the same thing everywhere.
-- Markdown descriptions and comments, labels, drag-and-drop, and an inline status
-  control on every card and sub-task row.
+- Markdown descriptions and comments, labels (shared across projects),
+  drag-and-drop, and an inline status control on every card and sub-task row.
 - A **CLI** over the same API, for when a terminal is faster than a browser.
 
 Deliberately absent: priorities, dependency/blocker links, sprints, time
@@ -81,20 +92,26 @@ Every command talks to a running server over HTTP, so the CLI and the web UI can
 never disagree. Point it somewhere else with `--server` or `$GEET_URL`.
 
 ```bash
-geet boards                                     # list boards
-geet board tasks                                # columns, cards, nested sub-tasks
-geet ls --type task --status todo --label infra
-geet new "Fix the importer" --type task --parent T-4 --label infra
-geet show T-12
-geet edit T-12 --status in-progress
-geet edit T-12 --desc-file notes.md             # or --desc-file - for stdin
-geet comment T-12 "Leaning towards a subtree merge."
-geet rm T-12
+geet projects                                   # list projects with ticket counts
+geet project new "mini-kg" --prefix KG
+geet boards --project mai                       # views in a project ('all' for global)
+geet board mai epics                            # columns, cards, nested sub-tasks
+geet ls --project mai --type task --status todo
+geet new "Fix the importer" --project mai --label infra
+geet new "Stream tokens" --parent MAI-4          # inherits its parent's project
+geet show MAI-12
+geet edit MAI-12 --status in-progress
+geet edit MAI-12 --desc-file notes.md           # or --desc-file - for stdin
+geet edit MAI-12 --project mini-kg              # moves its sub-tasks too
+geet comment MAI-12 "Leaning towards a subtree merge."
+geet rm MAI-12
+geet project rm mai                             # deletes its tickets, after a prompt
 ```
 
 `--label` creates the label if it doesn't exist yet. `--json` works on every
 read command. `edit` sends only the flags you passed, so changing a title never
-touches the description.
+touches the description. Set `GEET_PROJECT` to stay in one project without
+repeating `--project`.
 
 ## Configuration
 
@@ -103,6 +120,7 @@ touches the description.
 | `GEET_ADDR` | `:8080` | Listen address for `geet serve` |
 | `GEET_DB` | `./geet.db` (`/data/geet.db` in the container) | SQLite file |
 | `GEET_URL` | `http://localhost:8080` | Server the CLI talks to |
+| `GEET_PROJECT` | *(unset)* | Default project for CLI commands |
 | `PUID` / `PGID` | `99` / `100` | Container only: who owns the database file |
 
 There is no authentication. Bind it to your LAN, not the internet.
@@ -119,7 +137,7 @@ write.
 
 ```
 cmd/geet/          entrypoint: `serve` plus the CLI commands
-internal/store/    schema and every SQL statement, including board assembly
+internal/store/    schema, migrations, and every SQL statement including board assembly
 internal/api/      JSON API over the store
 internal/cli/      CLI, an HTTP client of that API
 web/               React + Vite UI, compiled into the binary via go:embed
@@ -131,5 +149,11 @@ lives only in `store.GetBoard`**. The web UI never recomputes it — after a car
 moves, the server returns the reassembled board and the client renders what it's
 given.
 
-`go test ./...` covers the hierarchy rules, cascading deletes, partial updates,
-board assembly in both directions, and column ordering.
+Ticket keys are never reused. Each project has a counter that only increments,
+so a `see MAI-2` written into a description keeps pointing at the same ticket
+even after deletes — and moving a ticket between projects deliberately keeps its
+original key for the same reason.
+
+`go test ./...` covers the hierarchy and same-project rules, cascading deletes,
+partial updates, board assembly in both directions, column ordering, per-project
+key sequences, and migrating a real pre-projects database in place.
