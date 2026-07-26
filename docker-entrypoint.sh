@@ -8,14 +8,14 @@ PUID=${PUID:-99}
 PGID=${PGID:-100}
 
 if [ "$(id -u)" = "0" ]; then
-  if ! getent group geet >/dev/null 2>&1; then
-    addgroup -g "$PGID" geet 2>/dev/null || true
+  if ! getent group geetproject >/dev/null 2>&1; then
+    addgroup -g "$PGID" geetproject 2>/dev/null || true
   fi
-  if ! getent passwd geet >/dev/null 2>&1; then
-    adduser -D -H -u "$PUID" -G geet geet 2>/dev/null || true
+  if ! getent passwd geetproject >/dev/null 2>&1; then
+    adduser -D -H -u "$PUID" -G geetproject geetproject 2>/dev/null || true
   fi
 
-  DB_DIR=$(dirname "${GEET_DB:-/data/geet.db}")
+  DB_DIR=$(dirname "${GEETPROJECT_DB:-/data/geetproject.db}")
   mkdir -p "$DB_DIR"
   # Only the data directory: chown -R over a bind mount with many files is slow
   # and there is nothing else here we should be touching.

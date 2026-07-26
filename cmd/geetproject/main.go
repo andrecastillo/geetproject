@@ -10,20 +10,21 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
-	geet "github.com/andrecastillo/geet"
-	"github.com/andrecastillo/geet/internal/api"
-	"github.com/andrecastillo/geet/internal/cli"
-	"github.com/andrecastillo/geet/internal/store"
+	geetproject "github.com/andrecastillo/geetproject"
+	"github.com/andrecastillo/geetproject/internal/api"
+	"github.com/andrecastillo/geetproject/internal/cli"
+	"github.com/andrecastillo/geetproject/internal/store"
 )
 
 const usage = cli.Usage + `
 Server environment:
-  GEET_ADDR   listen address (default :8080)
-  GEET_DB     path to the SQLite file (default ./geet.db, /data/geet.db in the container)
-  GEET_URL    server the CLI talks to (default http://localhost:8080)
+  GEETPROJECT_ADDR   listen address (default :8080)
+  GEETPROJECT_DB     path to the SQLite file (default ./geet.db, /data/geet.db in the container)
+  GEETPROJECT_URL    server the CLI talks to (default http://localhost:8080)
 `
 
 func main() {
@@ -34,7 +35,7 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		log.SetFlags(log.LstdFlags | log.Lmsgprefix)
-		log.SetPrefix("geet: ")
+		log.SetPrefix("geetproject: ")
 		if err := serve(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
@@ -47,7 +48,7 @@ func main() {
 				fmt.Print(usage)
 				os.Exit(2)
 			}
-			fmt.Fprintf(os.Stderr, "geet: %v\n", err)
+			fmt.Fprintf(os.Stderr, "geetproject: %v\n", err)
 			os.Exit(1)
 		}
 	}
@@ -57,13 +58,24 @@ func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
+	// Accept the pre-rename GEET_* names, loudly. Without this, anything still
+	// passing GEET_DB to a binary that only reads GEETPROJECT_DB would fall back
+	// to the default path and quietly start an empty database - which looks
+	// exactly like data loss rather than a misconfiguration.
+	if suffix, ok := strings.CutPrefix(key, "GEETPROJECT_"); ok {
+		legacy := "GEET_" + suffix
+		if v := os.Getenv(legacy); v != "" {
+			fmt.Fprintf(os.Stderr, "geetproject: %s is deprecated, use %s\n", legacy, key)
+			return v
+		}
+	}
 	return fallback
 }
 
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	addr := fs.String("addr", envOr("GEET_ADDR", ":8080"), "listen address")
-	dbPath := fs.String("db", envOr("GEET_DB", "geet.db"), "path to the SQLite file")
+	addr := fs.String("addr", envOr("GEETPROJECT_ADDR", ":8080"), "listen address")
+	dbPath := fs.String("db", envOr("GEETPROJECT_DB", "geet.db"), "path to the SQLite file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -81,7 +93,7 @@ func serve(args []string) error {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           logRequests(api.New(st, geet.WebHandler())),
+		Handler:           logRequests(api.New(st, geetproject.WebHandler())),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

@@ -1,0 +1,23 @@
+# Run geetproject as a per-user service, so the CLI always has a server to talk to.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/geetproject.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now geetproject
+#
+# For it to survive logout: sudo loginctl enable-linger $USER
+#
+# Not needed if you point GEETPROJECT_URL at a container running elsewhere.
+
+[Unit]
+Description=geetproject task tracker
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/geetproject serve
+Environment=GEETPROJECT_ADDR=127.0.0.1:8080
+Environment=GEETPROJECT_DB=%h/.local/share/geetproject/geet.db
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

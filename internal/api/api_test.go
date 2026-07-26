@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andrecastillo/geet/internal/store"
+	"github.com/andrecastillo/geetproject/internal/store"
 )
 
 func newTestServer(t *testing.T) http.Handler {

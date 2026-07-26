@@ -100,6 +100,6 @@ jobs:
             echo '```'
             echo
             echo "If this is the first run, set the package to **public** in"
-            echo "GitHub → Packages → geet → Package settings. While it is private,"
+            echo "GitHub → Packages → geetproject → Package settings. While it is private,"
             echo "Unraid gets a 401 polling for updates and shows \"not available\"."
           } >> "$GITHUB_STEP_SUMMARY"

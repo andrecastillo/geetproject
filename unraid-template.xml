@@ -1,14 +1,14 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>geet</Name>
-  <Repository>ghcr.io/andrecastillo/geet:latest</Repository>
-  <Registry>https://ghcr.io/andrecastillo/geet</Registry>
+  <Name>geetproject</Name>
+  <Repository>ghcr.io/andrecastillo/geetproject:latest</Repository>
+  <Registry>https://ghcr.io/andrecastillo/geetproject</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/andrecastillo/geet/issues</Support>
-  <Project>https://github.com/andrecastillo/geet</Project>
+  <Support>https://github.com/andrecastillo/geetproject/issues</Support>
+  <Project>https://github.com/andrecastillo/geetproject</Project>
   <Overview>
     A small, self-hosted kanban issue tracker for one person.
 
@@ -23,7 +23,7 @@
   </Overview>
   <Category>Productivity: Tools:</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <Icon>https://raw.githubusercontent.com/andrecastillo/geet/main/web/public/icon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/andrecastillo/geetproject/main/web/public/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <DonateText/>
@@ -38,9 +38,9 @@
           Description="Port for the web interface." Type="Port" Display="always"
           Required="true" Mask="false">8080</Config>
 
-  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/geet" Mode="rw"
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/geetproject" Mode="rw"
           Description="Holds geet.db, the entire database. Back this up."
-          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/geet</Config>
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/geetproject</Config>
 
   <Config Name="PUID" Target="PUID" Default="99" Mode=""
           Description="User ID that owns the database file. Unraid default is 99 (nobody)."

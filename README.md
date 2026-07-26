@@ -1,4 +1,4 @@
-# geet
+# geetproject
 
 A small, self-hosted kanban issue tracker for one person.
 
@@ -52,11 +52,11 @@ tracking, notifications, and multi-user. The point is to keep it small.
 ### Docker (how it's meant to run)
 
 ```bash
-docker run -d --name geet \
+docker run -d --name geetproject \
   -p 8080:8080 \
-  -v /mnt/user/appdata/geet:/data \
+  -v /mnt/user/appdata/geetproject:/data \
   -e PUID=99 -e PGID=100 \
-  ghcr.io/andrecastillo/geet:latest
+  ghcr.io/andrecastillo/geetproject:latest
 ```
 
 Then open `http://<host>:8080`. On Unraid, `unraid-template.xml` in this repo
@@ -70,8 +70,8 @@ Unraid's `nobody:users` so the database isn't left owned by root.
 
 ```bash
 npm --prefix web ci && npm --prefix web run build   # builds the UI
-go build -o geet ./cmd/geet                         # embeds it in the binary
-./geet serve --addr :8080 --db ./geet.db
+go build -o geetproject ./cmd/geetproject                         # embeds it in the binary
+./geetproject serve --addr :8080 --db ./geet.db
 ```
 
 Requires Go 1.25+ and Node 22+. The build is pure Go (`CGO_ENABLED=0` works),
@@ -82,45 +82,45 @@ because the SQLite driver is `modernc.org/sqlite` rather than a cgo binding.
 Run the API and the Vite dev server side by side; Vite proxies `/api` to 8080.
 
 ```bash
-go run ./cmd/geet serve          # terminal 1
+go run ./cmd/geetproject serve          # terminal 1
 npm --prefix web run dev         # terminal 2, then open http://localhost:5173
 ```
 
 ## CLI
 
 Every command talks to a running server over HTTP, so the CLI and the web UI can
-never disagree. Point it somewhere else with `--server` or `$GEET_URL`.
+never disagree. Point it somewhere else with `--server` or `$GEETPROJECT_URL`.
 
 ```bash
-geet projects                                   # list projects with ticket counts
-geet project new "mini-kg" --prefix KG
-geet boards --project mai                       # views in a project ('all' for global)
-geet board mai epics                            # columns, cards, nested sub-tasks
-geet ls --project mai --type task --status todo
-geet new "Fix the importer" --project mai --label infra
-geet new "Stream tokens" --parent MAI-4          # inherits its parent's project
-geet show MAI-12
-geet edit MAI-12 --status in-progress
-geet edit MAI-12 --desc-file notes.md           # or --desc-file - for stdin
-geet edit MAI-12 --project mini-kg              # moves its sub-tasks too
-geet comment MAI-12 "Leaning towards a subtree merge."
-geet rm MAI-12
-geet project rm mai                             # deletes its tickets, after a prompt
+geetproject projects                                   # list projects with ticket counts
+geetproject project new "mini-kg" --prefix KG
+geetproject boards --project mai                       # views in a project ('all' for global)
+geetproject board mai epics                            # columns, cards, nested sub-tasks
+geetproject ls --project mai --type task --status todo
+geetproject new "Fix the importer" --project mai --label infra
+geetproject new "Stream tokens" --parent MAI-4          # inherits its parent's project
+geetproject show MAI-12
+geetproject edit MAI-12 --status in-progress
+geetproject edit MAI-12 --desc-file notes.md           # or --desc-file - for stdin
+geetproject edit MAI-12 --project mini-kg              # moves its sub-tasks too
+geetproject comment MAI-12 "Leaning towards a subtree merge."
+geetproject rm MAI-12
+geetproject project rm mai                             # deletes its tickets, after a prompt
 ```
 
 `--label` creates the label if it doesn't exist yet. `--json` works on every
 read command. `edit` sends only the flags you passed, so changing a title never
-touches the description. Set `GEET_PROJECT` to stay in one project without
+touches the description. Set `GEETPROJECT_PROJECT` to stay in one project without
 repeating `--project`.
 
 ### Batch import
 
 One call creates a whole tree, in a single transaction. This is the way to file
-a plan's worth of work at once, and the way an LLM should use geet.
+a plan's worth of work at once, and the way an LLM should use geetproject.
 
 ```bash
-geet import --project mai --dry-run < plan.json   # validate, write nothing
-geet import --project mai < plan.json
+geetproject import --project mai --dry-run < plan.json   # validate, write nothing
+geetproject import --project mai < plan.json
 ```
 
 ```json
@@ -150,53 +150,53 @@ is reported at once naming the offending node, so a failure leaves nothing
 behind and a retry cannot half-duplicate the tree.
 
 ```
-$ geet import --project mai < broken.json
-geet: 3 problem(s) with the batch:
+$ geetproject import --project mai < broken.json
+geetproject: 3 problem(s) with the batch:
   tickets[0]: title is required
   tickets[1]: unknown type "story" (want epic, task or subtask)
   tickets[2]: unknown status "doing"
 ```
 
-### Driving geet from an LLM
+### Driving geetproject from an LLM
 
-`geet agent-guide` prints the whole interface — model, batch format, commands —
+`geetproject agent-guide` prints the whole interface — model, batch format, commands —
 in a form meant to be read by a model. It ships inside the binary, so it cannot
 drift from the code.
 
 ```bash
-geet agent-guide                       # read it
-geet agent-guide >> ~/CLAUDE.md        # or paste it into a system prompt
+geetproject agent-guide                       # read it
+geetproject agent-guide >> ~/CLAUDE.md        # or paste it into a system prompt
 ```
 
 Install the CLI where every project can reach it:
 
 ```bash
-go build -ldflags="-s -w" -o ~/.local/bin/geet ./cmd/geet
+go build -ldflags="-s -w" -o ~/.local/bin/geetproject ./cmd/geetproject
 ```
 
 To keep the server up so the CLI always has something to talk to, either point
-`GEET_URL` at the container on your server, or run it locally as a user service:
+`GEETPROJECT_URL` at the container on your server, or run it locally as a user service:
 
 ```bash
-systemctl --user enable --now geet     # see contrib/geet.service
+systemctl --user enable --now geetproject     # see contrib/geetproject.service
 ```
 
 ## Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GEET_ADDR` | `:8080` | Listen address for `geet serve` |
-| `GEET_DB` | `./geet.db` (`/data/geet.db` in the container) | SQLite file |
-| `GEET_URL` | `http://localhost:8080` | Server the CLI talks to |
-| `GEET_PROJECT` | *(unset)* | Default project for CLI commands |
+| `GEETPROJECT_ADDR` | `:8080` | Listen address for `geetproject serve` |
+| `GEETPROJECT_DB` | `./geet.db` (`/data/geet.db` in the container) | SQLite file |
+| `GEETPROJECT_URL` | `http://localhost:8080` | Server the CLI talks to |
+| `GEETPROJECT_PROJECT` | *(unset)* | Default project for CLI commands |
 | `PUID` / `PGID` | `99` / `100` | Container only: who owns the database file |
 
 There is no authentication. Bind it to your LAN, not the internet.
 
 ## Backups
 
-Everything lives in the single SQLite file at `GEET_DB`. Stopping the container
-checkpoints the write-ahead log into it, so a copy taken while geet is stopped
+Everything lives in the single SQLite file at `GEETPROJECT_DB`. Stopping the container
+checkpoints the write-ahead log into it, so a copy taken while geetproject is stopped
 is a complete, self-contained backup. To copy it while running, use
 `sqlite3 geet.db ".backup out.db"` rather than `cp`, which can catch a partial
 write.
@@ -204,7 +204,7 @@ write.
 ## Layout
 
 ```
-cmd/geet/          entrypoint: `serve` plus the CLI commands
+cmd/geetproject/          entrypoint: `serve` plus the CLI commands
 internal/store/    schema, migrations, and every SQL statement including board assembly
 internal/api/      JSON API over the store
 internal/cli/      CLI, an HTTP client of that API

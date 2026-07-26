@@ -19,18 +19,18 @@ COPY . .
 COPY --from=web /src/web/dist ./web/dist
 ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
-    go build -trimpath -ldflags="-s -w" -o /out/geet ./cmd/geet
+    go build -trimpath -ldflags="-s -w" -o /out/geetproject ./cmd/geetproject
 
 # 3. Runtime. Alpine rather than scratch so the entrypoint can fix ownership of
 #    the appdata volume and drop privileges, which is what Unraid expects.
 FROM alpine:3.22
 RUN apk add --no-cache su-exec tzdata wget
-COPY --from=build /out/geet /usr/local/bin/geet
+COPY --from=build /out/geetproject /usr/local/bin/geetproject
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-ENV GEET_DB=/data/geet.db \
-    GEET_ADDR=:8080 \
+ENV GEETPROJECT_DB=/data/geet.db \
+    GEETPROJECT_ADDR=:8080 \
     PUID=99 \
     PGID=100
 VOLUME /data
@@ -40,4 +40,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["geet", "serve"]
+CMD ["geetproject", "serve"]

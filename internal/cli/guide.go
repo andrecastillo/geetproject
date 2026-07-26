@@ -1,16 +1,16 @@
 package cli
 
-// AgentGuide is printed by `geet agent-guide`. It is the interface description
+// AgentGuide is printed by `geetproject agent-guide`. It is the interface description
 // meant to be read by an LLM: complete enough to use the tool correctly without
 // guessing, short enough to paste into a system prompt or a CLAUDE.md.
 //
 // Keep it in step with the commands. It is documentation that ships inside the
 // binary precisely so it cannot be left behind in a separate file.
-const AgentGuide = `# geet — task tracker CLI
+const AgentGuide = `# geetproject — task tracker CLI
 
-geet tracks tickets in a local SQLite database behind a small HTTP server.
+geetproject tracks tickets in a local SQLite database behind a small HTTP server.
 Every command below talks to that server, so the CLI and the web UI never
-disagree. If a command reports it cannot reach geet, the server is not running:
+disagree. If a command reports it cannot reach geetproject, the server is not running:
 say so rather than retrying.
 
 ## Model
@@ -34,7 +34,7 @@ same ticket forever. Refer to tickets by key (MAI-12), never by title.
 Pipe JSON on stdin. One call creates a whole tree in a single transaction: if
 anything is wrong, nothing is written.
 
-    geet import --project mai <<'EOF'
+    geetproject import --project mai <<'EOF'
     {
       "tickets": [
         {
@@ -73,7 +73,7 @@ A bare JSON array is accepted in place of {"tickets": [...]}.
 **Always dry-run first.** It validates the whole batch, prints the keys it would
 assign, and writes nothing:
 
-    geet import --project mai --dry-run < plan.json
+    geetproject import --project mai --dry-run < plan.json
 
 A rejected batch reports every problem at once, each naming the offending node
 (e.g. "tickets[0].children[1]: unknown status \"doing\""). Fix them all and
@@ -81,42 +81,42 @@ re-run; a failed import leaves nothing behind, so retrying is safe.
 
 ## Single tickets
 
-    geet new "Fix the importer" --project mai --type task --label infra
-    geet new "Stream tokens" --parent MAI-4        # joins its parent's project
-    geet show MAI-12
-    geet edit MAI-12 --status in-progress
-    geet edit MAI-12 --title "New title"           # only the flags you pass change
-    geet edit MAI-12 --desc-file notes.md          # or --desc-file - to read stdin
-    geet comment MAI-12 "Tried the subtree merge; it works."
-    geet rm MAI-12 --force
+    geetproject new "Fix the importer" --project mai --type task --label infra
+    geetproject new "Stream tokens" --parent MAI-4        # joins its parent's project
+    geetproject show MAI-12
+    geetproject edit MAI-12 --status in-progress
+    geetproject edit MAI-12 --title "New title"           # only the flags you pass change
+    geetproject edit MAI-12 --desc-file notes.md          # or --desc-file - to read stdin
+    geetproject comment MAI-12 "Tried the subtree merge; it works."
+    geetproject rm MAI-12 --force
 
 edit only touches the flags given, so changing a title never clears a
 description. There is no need to re-send fields you are not changing.
 
 ## Reading
 
-    geet projects                                  # slugs, prefixes, ticket counts
-    geet ls --project mai                          # add --type/--status/--label/--search
-    geet ls --project mai --status todo --json
-    geet boards --project mai                      # the saved views in a project
-    geet board mai epics                           # a view's columns and cards
+    geetproject projects                                  # slugs, prefixes, ticket counts
+    geetproject ls --project mai                          # add --type/--status/--label/--search
+    geetproject ls --project mai --status todo --json
+    geetproject boards --project mai                      # the saved views in a project
+    geetproject board mai epics                           # a view's columns and cards
 
 Every read command takes --json for machine-readable output. Prefer it when you
 intend to parse the result.
 
 ## Projects
 
-    geet projects
-    geet project new "mini-kg" --prefix KG
-    geet project rm mai --force                    # deletes its tickets too
+    geetproject projects
+    geetproject project new "mini-kg" --prefix KG
+    geetproject project rm mai --force                    # deletes its tickets too
 
 Create a project before importing into it. Ask before deleting one: it destroys
 every ticket it holds.
 
 ## Conventions
 
-- Set GEET_PROJECT to avoid repeating --project.
-- Set GEET_URL if the server is not at http://localhost:8080.
+- Set GEETPROJECT_PROJECT to avoid repeating --project.
+- Set GEETPROJECT_URL if the server is not at http://localhost:8080.
 - Exit status is 0 on success, 1 on failure, with the reason on stderr.
 - Write a genuine description on anything non-obvious. A title alone is rarely
   enough for the person who picks the ticket up later.

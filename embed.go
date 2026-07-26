@@ -1,10 +1,10 @@
-// Package geet embeds the built web UI into the binary.
+// Package geetproject embeds the built web UI into the binary.
 //
 // This file lives at the module root because go:embed can only reach files at or
 // below its own package directory, and web/dist is a sibling of cmd/ and
 // internal/. Embedding is what makes the whole app one file and therefore one
 // tiny container.
-package geet
+package geetproject
 
 import (
 	"embed"
@@ -17,8 +17,8 @@ import (
 var distFS embed.FS
 
 const placeholder = `<!doctype html><html><head><meta charset="utf-8">
-<title>geet</title></head><body style="font-family:sans-serif;padding:2rem">
-<h1>geet</h1><p>The web UI has not been built into this binary.</p>
+<title>geetproject</title></head><body style="font-family:sans-serif;padding:2rem">
+<h1>geetproject</h1><p>The web UI has not been built into this binary.</p>
 <p>Run <code>npm --prefix web run build</code> and rebuild, or use the Vite dev
 server on port 5173 during development. The JSON API is live at
 <code>/api/boards</code>.</p></body></html>`

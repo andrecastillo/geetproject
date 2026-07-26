@@ -19,7 +19,7 @@ export function useApp() {
 }
 
 /** Remembering the last scope makes a bare visit to "/" land where you left off. */
-export const LAST_SCOPE_KEY = 'geet.lastScope'
+export const LAST_SCOPE_KEY = 'geetproject.lastScope'
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -75,7 +75,7 @@ export default function App() {
     <div className="app">
       <div className="topbar">
         <Link to="/" className="brand">
-          geet
+          geetproject
         </Link>
         <span className="spacer" />
       </div>

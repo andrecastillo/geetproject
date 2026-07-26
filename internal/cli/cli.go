@@ -1,4 +1,4 @@
-// Package cli implements geet's command line client. It talks to a running
+// Package cli implements geetproject's command line client. It talks to a running
 // server over HTTP rather than opening the database directly, so the CLI and the
 // web UI always agree - including about board assembly, which only the server
 // knows how to do.
@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andrecastillo/geet/internal/store"
+	"github.com/andrecastillo/geetproject/internal/store"
 )
 
-const Usage = `Usage: geet <command> [flags]
+const Usage = `Usage: geetproject <command> [flags]
 
 Server:
   serve                          run the web UI and API
@@ -44,11 +44,11 @@ Batch (for scripts and agents):
 
 Views:
   boards    [--project P]        views in a scope ('all' for cross-project)
-  board     SCOPE VIEW           a view's columns and cards, e.g. geet board mai epics
+  board     SCOPE VIEW           a view's columns and cards, e.g. geetproject board mai epics
 
 Common flags:
-  --server URL    geet server (default $GEET_URL, else http://localhost:8080)
-  --project P     project slug (default $GEET_PROJECT); 'all' means every project
+  --server URL    geetproject server (default $GEETPROJECT_URL, else http://localhost:8080)
+  --project P     project slug (default $GEETPROJECT_PROJECT); 'all' means every project
   --json          raw JSON instead of formatted output
 `
 
@@ -75,7 +75,7 @@ func (c *client) do(method, path string, body any, out any) error {
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("cannot reach geet at %s: %w", c.base, err)
+		return fmt.Errorf("cannot reach geetproject at %s: %w", c.base, err)
 	}
 	defer res.Body.Close()
 	raw, err := io.ReadAll(res.Body)
@@ -108,11 +108,11 @@ func Run(args []string) error {
 	// Every subcommand shares --server and --json, so pull them off first.
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	server := fs.String("server", envOr("GEET_URL", "http://localhost:8080"), "geet server URL")
+	server := fs.String("server", envOr("GEETPROJECT_URL", "http://localhost:8080"), "geetproject server URL")
 	asJSON := fs.Bool("json", false, "raw JSON output")
 
 	var (
-		project    = fs.String("project", os.Getenv("GEET_PROJECT"), "project slug")
+		project    = fs.String("project", os.Getenv("GEETPROJECT_PROJECT"), "project slug")
 		ticketType = fs.String("type", "", "ticket type: epic, task or subtask")
 		status     = fs.String("status", "", "status slug")
 		parent     = fs.String("parent", "", "parent ticket key")
@@ -158,7 +158,7 @@ func Run(args []string) error {
 		switch arg(0) {
 		case "new":
 			if arg(1) == "" {
-				return fmt.Errorf(`project new needs a name: geet project new "mai"`)
+				return fmt.Errorf(`project new needs a name: geetproject project new "mai"`)
 			}
 			return c.createProject(arg(1), *prefix, *color, *asJSON)
 		case "rm":
@@ -178,12 +178,12 @@ func Run(args []string) error {
 		return c.list(*project, *ticketType, *status, *parent, *search, labels, *asJSON)
 	case "new":
 		if arg(0) == "" {
-			return fmt.Errorf(`new needs a title: geet new "Fix the thing"`)
+			return fmt.Errorf(`new needs a title: geetproject new "Fix the thing"`)
 		}
 		return c.create(arg(0), *project, *ticketType, *parent, *status, *descFile, labels, *asJSON)
 	case "show":
 		if arg(0) == "" {
-			return fmt.Errorf("show needs a ticket key, e.g. geet show T-12")
+			return fmt.Errorf("show needs a ticket key, e.g. geetproject show T-12")
 		}
 		return c.show(arg(0), *asJSON)
 	case "edit":
@@ -198,16 +198,16 @@ func Run(args []string) error {
 		return c.remove(arg(0), *force)
 	case "comment":
 		if arg(0) == "" || arg(1) == "" {
-			return fmt.Errorf(`comment needs a key and a body: geet comment T-12 "note"`)
+			return fmt.Errorf(`comment needs a key and a body: geetproject comment T-12 "note"`)
 		}
 		return c.comment(arg(0), arg(1), *asJSON)
 	case "boards":
 		return c.boards(scopeOr(*project), *asJSON)
 	case "board":
 		if arg(0) == "" {
-			return fmt.Errorf("board needs a scope and a view, e.g. geet board mai epics")
+			return fmt.Errorf("board needs a scope and a view, e.g. geetproject board mai epics")
 		}
-		// `geet board mai epics`, or `geet board epics` with --project set.
+		// `geetproject board mai epics`, or `geetproject board epics` with --project set.
 		if arg(1) == "" {
 			return c.board(scopeOr(*project), arg(0), *asJSON)
 		}
@@ -233,6 +233,17 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	// Accept the pre-rename GEET_* names, loudly. Without this, anything still
+	// passing GEET_DB to a binary that only reads GEETPROJECT_DB would fall back
+	// to the default path and quietly start an empty database - which looks
+	// exactly like data loss rather than a misconfiguration.
+	if suffix, ok := strings.CutPrefix(key, "GEETPROJECT_"); ok {
+		legacy := "GEET_" + suffix
+		if v := os.Getenv(legacy); v != "" {
+			fmt.Fprintf(os.Stderr, "geetproject: %s is deprecated, use %s\n", legacy, key)
+			return v
+		}
 	}
 	return fallback
 }
@@ -361,7 +372,7 @@ func (c *client) create(title, project, ticketType, parent, status, descFile str
 	// A child inherits its parent's project, so only send one when standing alone.
 	if parent == "" {
 		if project == "" {
-			return fmt.Errorf("a ticket needs a project: pass --project, or set GEET_PROJECT")
+			return fmt.Errorf("a ticket needs a project: pass --project, or set GEETPROJECT_PROJECT")
 		}
 		body["project"] = project
 	}
@@ -566,7 +577,7 @@ func (c *client) projects(asJSON bool) error {
 		return dumpJSON(ps)
 	}
 	if len(ps) == 0 {
-		fmt.Println("No projects yet. Create one with: geet project new \"mai\"")
+		fmt.Println("No projects yet. Create one with: geetproject project new \"mai\"")
 		return nil
 	}
 	for _, p := range ps {
@@ -626,14 +637,14 @@ func (c *client) removeProject(slug string, force bool) error {
 
 func (c *client) importBatch(project string, dryRun, asJSON bool) error {
 	if project == "" {
-		return fmt.Errorf("import needs a project: pass --project, or set GEET_PROJECT")
+		return fmt.Errorf("import needs a project: pass --project, or set GEETPROJECT_PROJECT")
 	}
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return err
 	}
 	if len(strings.TrimSpace(string(raw))) == 0 {
-		return fmt.Errorf("no JSON on stdin; pipe a batch in, e.g. geet import --project %s < plan.json", project)
+		return fmt.Errorf("no JSON on stdin; pipe a batch in, e.g. geetproject import --project %s < plan.json", project)
 	}
 
 	// Accept either {"tickets":[...]} or a bare [...] array, since a model asked

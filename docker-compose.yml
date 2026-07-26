@@ -1,8 +1,8 @@
 services:
-  geet:
+  geetproject:
     build: .
-    image: geet:latest
-    container_name: geet
+    image: geetproject:latest
+    container_name: geetproject
     ports:
       - "8080:8080"
     volumes:
