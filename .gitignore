@@ -13,3 +13,8 @@
 # editor / os
 .DS_Store
 *.swp
+
+# A global ~/.gitignore_global rule (*.sql) would otherwise exclude the embedded
+# schema, which silently produces a repo that cannot compile: embed.go and
+# store.go both go:embed files that must be present at checkout.
+!internal/store/schema.sql
