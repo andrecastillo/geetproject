@@ -1,0 +1,22 @@
+# The build installs its own dependencies and builds its own bundle. Shipping
+# the host's copies costs ~146MB of build context per build and would let
+# `COPY web/ ./` overwrite the freshly installed node_modules with whatever the
+# host happens to have, which need not even be the same architecture.
+web/node_modules/
+web/dist/
+
+.git/
+.github/
+
+# Local state and build output that must never end up in an image.
+data/
+*.db
+*.db-wal
+*.db-shm
+geet
+
+# Docs and deployment config the image doesn't need.
+*.md
+docker-compose.yml
+unraid-template.xml
+contrib/

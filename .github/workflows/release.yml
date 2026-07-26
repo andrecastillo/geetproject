@@ -1,0 +1,105 @@
+name: build and publish
+
+# Publishes the container image to GHCR. Unraid's "update ready" indicator is a
+# comparison between the local image digest and the remote one for this repo:tag,
+# so an image that only exists locally never offers an Apply Update link — which
+# is the whole reason this workflow exists.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Tests gate the publish: a red build must never become :latest, because
+  # :latest is what the server pulls when you click Apply Update.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: typecheck and build the web UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets the built-in GITHUB_TOKEN push to GHCR - no personal access token.
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # :latest tracks main; a v1.2.3 tag also publishes 1.2.3 and 1.2 so a
+          # bad release can be rolled back by pointing the Unraid template at the
+          # previous tag rather than rebuilding.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+
+      - name: build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # amd64 only: Unraid is x86_64, and arm64 would double the build for
+          # nothing. Add linux/arm64 here if the image is ever published for
+          # other people to use.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: summary
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "If this is the first run, set the package to **public** in"
+            echo "GitHub → Packages → geet → Package settings. While it is private,"
+            echo "Unraid gets a 401 polling for updates and shows \"not available\"."
+          } >> "$GITHUB_STEP_SUMMARY"
