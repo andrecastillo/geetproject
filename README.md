@@ -59,12 +59,24 @@ docker run -d --name geetproject \
   ghcr.io/andrecastillo/geetproject:latest
 ```
 
-Then open `http://<host>:8080`. On Unraid, `unraid-template.xml` in this repo
-sets the same thing up through Community Applications; `PUID`/`PGID` default to
-Unraid's `nobody:users` so the database isn't left owned by root.
+Then open `http://<host>:8080`. `PUID`/`PGID` default to Unraid's
+`nobody:users` so the database isn't left owned by root.
 
 `docker compose up --build` also works and is what the included
 `docker-compose.yml` is for.
+
+### Unraid
+
+Copy `unraid-template.xml` to `/boot/config/plugins/dockerMan/templates-user/`
+as `my-geetproject.xml` and edit it in the Docker tab, or fill the same values
+into **Add Container** by hand.
+
+The template matters for more than convenience: Unraid decides whether an update
+is available by comparing the local image digest against the registry's, keyed by
+the `<Repository>` value. A container built locally — or loaded with
+`docker load` — has no registry digest, so it shows *"not available"* with no
+Apply Update link. Pointing at `ghcr.io` is what makes the normal update button
+work, and no Community Applications listing is needed for that.
 
 ### From source
 
