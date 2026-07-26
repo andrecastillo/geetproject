@@ -378,6 +378,9 @@ type ticketDetail struct {
 	*store.Ticket
 	Children []store.Ticket  `json:"children"`
 	Comments []store.Comment `json:"comments"`
+	// DescendantCount is what the delete confirmation warns about, so the UI
+	// can say how much a cascade would take with it.
+	DescendantCount int `json:"descendant_count"`
 }
 
 func (s *Server) getTicket(w http.ResponseWriter, r *http.Request) {
@@ -397,7 +400,13 @@ func (s *Server) getTicket(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ticketDetail{Ticket: t, Children: children, Comments: comments})
+	n, err := s.st.CountDescendants(r.Context(), key)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ticketDetail{
+		Ticket: t, Children: children, Comments: comments, DescendantCount: n})
 }
 
 func (s *Server) updateTicket(w http.ResponseWriter, r *http.Request) {
