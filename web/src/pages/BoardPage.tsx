@@ -19,12 +19,20 @@ import ScopeSettings from '../components/ScopeSettings'
 import TicketModal from '../components/TicketModal'
 import { CardBody } from '../components/TicketCard'
 
+// Stable identity for "no views", so effects depending on the list do not
+// re-run on every render while a scope's views are still loading.
+const EMPTY_VIEWS: Board[] = []
+
 export default function BoardPage() {
   const { scope = ALL_SCOPE, view: viewSlug, key } = useParams()
   const { projects, statuses, labels, fail } = useApp()
   const navigate = useNavigate()
 
-  const [views, setViews] = useState<Board[]>([])
+  // Views are stored with the scope they were fetched for. Scope changes the
+  // instant the URL does, but the fetch does not, so anything that reads the
+  // list has to know whether it still belongs to the scope on screen -
+  // otherwise we send one scope's view slugs to another and 404.
+  const [views, setViews] = useState<{ scope: string; list: Board[] }>({ scope: '', list: [] })
   const [board, setBoard] = useState<BoardView | null>(null)
   const [draggingKey, setDraggingKey] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -40,10 +48,13 @@ export default function BoardPage() {
 
   const loadViews = useCallback(async () => {
     try {
-      setViews(await api.boards(scope))
+      const list = await api.boards(scope)
+      setViews({ scope, list })
+      return list
     } catch (e) {
       fail(e)
-      setViews([])
+      setViews({ scope, list: EMPTY_VIEWS })
+      return EMPTY_VIEWS
     }
   }, [scope, fail])
 
@@ -51,12 +62,17 @@ export default function BoardPage() {
     void loadViews()
   }, [loadViews])
 
-  // Landing on a scope with no view named picks its first one.
+  const viewsLoaded = views.scope === scope
+  const scopeViews = viewsLoaded ? views.list : EMPTY_VIEWS
+
+  // Landing on a scope with no view named - or with one it does not have, from
+  // a stale link or a deleted view - picks its first one.
   useEffect(() => {
-    if (!viewSlug && views.length > 0) {
-      navigate(`/p/${scope}/b/${views[0].slug}`, { replace: true })
+    if (!viewsLoaded || scopeViews.length === 0) return
+    if (!viewSlug || !scopeViews.some((v) => v.slug === viewSlug)) {
+      navigate(`/p/${scope}/b/${scopeViews[0].slug}`, { replace: true })
     }
-  }, [viewSlug, views, scope, navigate])
+  }, [viewSlug, viewsLoaded, scopeViews, scope, navigate])
 
   const reload = useCallback(async () => {
     if (!viewSlug) return
@@ -67,10 +83,15 @@ export default function BoardPage() {
     }
   }, [scope, viewSlug, fail])
 
+  // Only fetch once this scope's views are known to include the slug; until
+  // then the redirect above is still deciding where we belong.
+  const viewExists = !!viewSlug && scopeViews.some((v) => v.slug === viewSlug)
+
   useEffect(() => {
     setBoard(null)
+    if (!viewExists) return
     void reload()
-  }, [reload])
+  }, [viewExists, reload])
 
   const openTicket = (k: string) => navigate(`/p/${scope}/b/${viewSlug}/t/${k}`)
   const closeTicket = () => navigate(`/p/${scope}/b/${viewSlug}`)
@@ -179,7 +200,7 @@ export default function BoardPage() {
         </div>
 
         <nav className="view-tabs">
-          {views.map((v) => (
+          {scopeViews.map((v) => (
             <NavLink
               key={v.slug}
               to={`/p/${scope}/b/${v.slug}`}
@@ -201,7 +222,11 @@ export default function BoardPage() {
 
       {!board ? (
         <div className="center-note">
-          {views.length === 0 ? 'This scope has no views yet.' : 'Loading board…'}
+          {!viewsLoaded
+            ? 'Loading…'
+            : scopeViews.length === 0
+              ? 'This scope has no views yet.'
+              : 'Loading board…'}
         </div>
       ) : (
         <DndContext
@@ -280,11 +305,14 @@ export default function BoardPage() {
       {settingsOpen && (
         <ScopeSettings
           scope={scope}
-          views={views}
+          views={scopeViews}
           onClose={() => setSettingsOpen(false)}
           onViewsChanged={async () => {
-            await loadViews()
-            await reload()
+            const list = await loadViews()
+            // Deleting the view we are sitting on leaves the URL pointing at
+            // nothing. The redirect above moves us; refetching it here would
+            // only raise a 404 on the way out.
+            if (list.some((v) => v.slug === viewSlug)) await reload()
           }}
         />
       )}
