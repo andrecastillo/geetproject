@@ -1,14 +1,14 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
-import App, { LAST_SCOPE_KEY } from './App'
+import App from './App'
 import { ALL_SCOPE } from './api'
 import BoardPage from './pages/BoardPage'
+import { lastScope } from './prefs'
 import './styles.css'
 
 function Home() {
-  const remembered = localStorage.getItem(LAST_SCOPE_KEY) || ALL_SCOPE
-  return <Navigate to={`/p/${remembered}`} replace />
+  return <Navigate to={`/p/${lastScope(ALL_SCOPE)}`} replace />
 }
 
 createRoot(document.getElementById('root')!).render(

@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import { useApp } from '../App'
 import { ALL_SCOPE, api, type Board, type BoardView, type Card } from '../api'
+import { lastView, rememberView } from '../prefs'
 import BoardColumn, { columnDroppableId } from '../components/BoardColumn'
 import NewTicketDialog from '../components/NewTicketDialog'
 import ScopeSettings from '../components/ScopeSettings'
@@ -66,11 +67,15 @@ export default function BoardPage() {
   const scopeViews = viewsLoaded ? views.list : EMPTY_VIEWS
 
   // Landing on a scope with no view named - or with one it does not have, from
-  // a stale link or a deleted view - picks its first one.
+  // a stale link or a deleted view - reopens the tab this scope was last left
+  // on, falling back to its first. A remembered view that has since been
+  // deleted has to fall back too, or the memory would resurrect a 404.
   useEffect(() => {
     if (!viewsLoaded || scopeViews.length === 0) return
     if (!viewSlug || !scopeViews.some((v) => v.slug === viewSlug)) {
-      navigate(`/p/${scope}/b/${scopeViews[0].slug}`, { replace: true })
+      const remembered = lastView(scope)
+      const target = scopeViews.find((v) => v.slug === remembered) ?? scopeViews[0]
+      navigate(`/p/${scope}/b/${target.slug}`, { replace: true })
     }
   }, [viewSlug, viewsLoaded, scopeViews, scope, navigate])
 
@@ -92,6 +97,12 @@ export default function BoardPage() {
     if (!viewExists) return
     void reload()
   }, [viewExists, reload])
+
+  // Whichever tab a scope is left on is the one it reopens on. Recorded only
+  // once the view is known to be real, so a bad URL cannot poison the memory.
+  useEffect(() => {
+    if (viewExists && viewSlug) rememberView(scope, viewSlug)
+  }, [scope, viewSlug, viewExists])
 
   const openTicket = (k: string) => navigate(`/p/${scope}/b/${viewSlug}/t/${k}`)
   const closeTicket = () => navigate(`/p/${scope}/b/${viewSlug}`)

@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation, useNavigate, useOutletContext } from 'react-
 import { ALL_SCOPE, api, type Label, type Project, type Status } from './api'
 import NewProjectDialog from './components/NewProjectDialog'
 import Sidebar from './components/Sidebar'
+import { rememberScope } from './prefs'
 
 export interface AppCtx {
   projects: Project[]
@@ -18,9 +19,6 @@ export function useApp() {
   return useOutletContext<AppCtx>()
 }
 
-/** Remembering the last scope makes a bare visit to "/" land where you left off. */
-export const LAST_SCOPE_KEY = 'geetproject.lastScope'
-
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([])
   const [statuses, setStatuses] = useState<Status[]>([])
@@ -31,8 +29,12 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
 
-  // Routes are /p/:scope/b/:view/..., so the scope is the second segment.
-  const scope = location.pathname.split('/')[2] ?? ALL_SCOPE
+  // Routes are /p/:scope/b/:view/..., so the scope is the second segment. "/"
+  // names no scope at all, which is a different thing from naming the
+  // cross-project one - see the effect below.
+  const segments = location.pathname.split('/')
+  const namedScope = segments[1] === 'p' ? (segments[2] ?? '') : ''
+  const scope = namedScope || ALL_SCOPE
 
   const fail = useCallback((err: unknown) => {
     setError(err instanceof Error ? err.message : String(err))
@@ -57,9 +59,13 @@ export default function App() {
       .finally(() => setLoading(false))
   }, [fail])
 
+  // Only a scope the URL actually names is worth remembering. On "/" the
+  // fallback above is not a choice the user made, and writing it would erase
+  // the memory before <Home> can read it - Home sits behind the loading gate
+  // below, so it does not mount until well after this effect has run.
   useEffect(() => {
-    if (scope) localStorage.setItem(LAST_SCOPE_KEY, scope)
-  }, [scope])
+    if (namedScope) rememberScope(namedScope)
+  }, [namedScope])
 
   const ctx: AppCtx = {
     projects,
