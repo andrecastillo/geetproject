@@ -138,7 +138,7 @@ func (s *Store) CreateProject(ctx context.Context, in Project) (*Project, error)
 		return nil, err
 	}
 	// A project with no views renders as a blank page, so give it the same
-	// starting pair every scope gets.
+	// starting set every scope gets.
 	if err := s.seedDefaultViews(ctx, &id); err != nil {
 		return nil, fmt.Errorf("seed views for %s: %w", in.Slug, err)
 	}

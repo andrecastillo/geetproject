@@ -229,8 +229,9 @@ func TestDeleteProjectCascades(t *testing.T) {
 		`SELECT COUNT(*) FROM board WHERE project_id IS NOT NULL`).Scan(&boards); err != nil {
 		t.Fatal(err)
 	}
-	if boards != 2 {
-		t.Errorf("only the surviving project's 2 views should remain, got %d", boards)
+	if boards != len(defaultViews) {
+		t.Errorf("only the surviving project's %d views should remain, got %d",
+			len(defaultViews), boards)
 	}
 }
 

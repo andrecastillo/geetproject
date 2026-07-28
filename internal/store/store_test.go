@@ -67,8 +67,13 @@ func TestSeedCreatesStatusesAndBoards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(boards) != 2 {
-		t.Fatalf("want 2 seeded boards, got %d", len(boards))
+	if len(boards) != 3 {
+		t.Fatalf("want 3 seeded boards, got %d", len(boards))
+	}
+	for i, want := range []string{"all-work", "epics", "tasks"} {
+		if boards[i].Slug != want {
+			t.Errorf("tab %d: want %s, got %s", i, want, boards[i].Slug)
+		}
 	}
 	view, err := s.GetBoard(ctx, "demo", "epics")
 	if err != nil {

@@ -33,8 +33,8 @@ Done, so it broke out into a card of its own with a breadcrumb back to `MAI-4`.
   moving a ticket moves its whole subtree.
 - **Views are saved filters** within a project, shown as tabs. A view picks a
   ticket type and optionally some labels, so "just the epics in mai" or "tasks
-  labelled frontend" are ordinary views. Every project gets **All** and **Epics**
-  to start with.
+  labelled frontend" are ordinary views. Every scope gets **All**, **Epics** and
+  **Tasks** to start with, and reopens on whichever tab you left it on.
 - **Sub-tasks nest, then break out.** A sub-task renders as a row inside its
   parent's card while it shares the parent's status, and becomes a card of its
   own — carrying a `↳ in T-4` breadcrumb — the moment its status differs.

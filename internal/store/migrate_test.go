@@ -200,13 +200,20 @@ func TestMigrateFromV1(t *testing.T) {
 		t.Errorf("comments lost in migration: %+v", comments)
 	}
 
-	// The old global boards survive as cross-project views, columns and all.
+	// The old global boards survive as cross-project views, columns and all, and
+	// the everything view they never had is backfilled ahead of them - the old
+	// database was seeded before "All" existed.
 	globals, err := s.ListBoards(ctx, AllScope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(globals) != 2 {
-		t.Fatalf("want the 2 old boards as global views, got %+v", globals)
+	if len(globals) != 3 {
+		t.Fatalf("want the 2 old boards plus a backfilled All, got %+v", globals)
+	}
+	for i, want := range []string{"all-work", "epics", "tasks"} {
+		if globals[i].Slug != want {
+			t.Errorf("cross-project tab %d: want %s, got %s", i, want, globals[i].Slug)
+		}
 	}
 	view, err := s.GetBoard(ctx, AllScope, "tasks")
 	if err != nil {
@@ -270,6 +277,118 @@ func TestMigrateIsIdempotent(t *testing.T) {
 		}
 		if tickets != 3 {
 			t.Fatalf("open #%d: want 3 tickets, got %d", i+1, tickets)
+		}
+		s.Close()
+	}
+}
+
+// slugsOf names a scope's views in tab order, which is what the assertions here
+// are really about: a backfilled view has to land in its slot, not on the end.
+func slugsOf(t *testing.T, s *Store, scope string) []string {
+	t.Helper()
+	boards, err := s.ListBoards(context.Background(), scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make([]string, 0, len(boards))
+	for _, b := range boards {
+		out = append(out, b.Slug)
+	}
+	return out
+}
+
+func eq(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Scopes seeded before the Tasks view existed have to be topped up on the way
+// in, since nothing in the UI can add a view at a chosen position afterwards.
+func TestBackfillTopsUpOlderScopes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aged.db")
+	ctx := context.Background()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := mustProject(t, s, "mai", "mai", "MAI")
+	// A view of the user's own, to prove the backfill inserts around it rather
+	// than over it.
+	if _, err := s.CreateBoard(ctx, Board{Name: "Mine", ProjectID: &p.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Age it: no Tasks in the project, no All on the cross-project scope (which
+	// inherited its views from the pre-projects database), and no record of the
+	// backfill ever having run.
+	for _, stmt := range []string{
+		`DELETE FROM board WHERE slug = 'tasks' AND project_id IS NOT NULL`,
+		`DELETE FROM board WHERE slug = 'all-work' AND project_id IS NULL`,
+		`UPDATE board SET position = position - 1 WHERE project_id IS NULL`,
+		`DELETE FROM meta WHERE key = '` + backfillMarker + `'`,
+	} {
+		if _, err := s.DB().Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	s.Close()
+
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+
+	if got, want := slugsOf(t, s, AllScope), []string{"all-work", "epics", "tasks"}; !eq(got, want) {
+		t.Errorf("cross-project scope: want %v, got %v", want, got)
+	}
+	if got, want := slugsOf(t, s, "mai"), []string{"all-work", "epics", "tasks", "mine"}; !eq(got, want) {
+		t.Errorf("mai: want %v, got %v", want, got)
+	}
+	// The backfilled view is a usable board, not an empty one.
+	view, err := s.GetBoard(ctx, "mai", "tasks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Columns) != len(defaultStatuses) {
+		t.Errorf("want %d columns on the backfilled view, got %d",
+			len(defaultStatuses), len(view.Columns))
+	}
+	if view.FilterType != TypeTask {
+		t.Errorf("the Tasks view should filter to tasks, got %q", view.FilterType)
+	}
+}
+
+// The backfill runs once. A default view someone deliberately deleted must stay
+// deleted rather than reappearing with the next restart.
+func TestBackfillDoesNotResurrectADeletedView(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kept.db")
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustProject(t, s, "mai", "mai", "MAI")
+	if err := s.DeleteBoard(context.Background(), "mai", "epics"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	for i := range 3 {
+		s, err := Open(path)
+		if err != nil {
+			t.Fatalf("reopen #%d: %v", i+1, err)
+		}
+		if got, want := slugsOf(t, s, "mai"), []string{"all-work", "tasks"}; !eq(got, want) {
+			t.Fatalf("reopen #%d: want %v, got %v", i+1, want, got)
 		}
 		s.Close()
 	}

@@ -327,38 +327,146 @@ func (s *Store) seed() error {
 			}
 		}
 	}
-	return nil
+
+	return s.backfillDefaultViews(ctx, projects)
 }
 
-// seedDefaultViews gives a scope the two views every scope wants: everything,
-// and epics only. projectID nil means the cross-project scope. Shared by seed()
-// and CreateProject so a new project is usable the moment it exists.
+// defaultViews are the views every scope starts with, in tab order. The slugs
+// are spelled out rather than derived from the names because they are what the
+// UI routes on: renaming a view must not move its URL.
+type defaultView struct{ name, slug, ftype string }
+
+var defaultViews = []defaultView{
+	{"All", "all-work", "any"},
+	{"Epics", "epics", TypeEpic},
+	{"Tasks", "tasks", TypeTask},
+}
+
+// seedDefaultViews gives a scope the views every scope wants: everything, epics
+// only, and tasks only. projectID nil means the cross-project scope. Shared by
+// seed() and CreateProject so a new project is usable the moment it exists.
 func (s *Store) seedDefaultViews(ctx context.Context, projectID *int64) error {
-	statuses, err := s.ListStatuses(ctx)
+	statusIDs, err := s.allStatusIDs(ctx)
 	if err != nil {
 		return err
 	}
-	statusIDs := make([]int64, 0, len(statuses))
-	for _, st := range statuses {
-		statusIDs = append(statusIDs, st.ID)
-	}
-
-	for i, b := range []struct{ name, slug, ftype string }{
-		{"All", "all-work", "any"},
-		{"Epics", "epics", TypeEpic},
-	} {
-		created, err := s.CreateBoard(ctx, Board{
-			Name: b.name, Slug: b.slug, FilterType: b.ftype,
-			Position: i + 1, ProjectID: projectID,
-		})
-		if err != nil {
-			return err
-		}
-		if err := s.SetBoardColumns(ctx, created.ID, statusIDs); err != nil {
+	for i, d := range defaultViews {
+		if err := s.createDefaultView(ctx, projectID, i+1, d, statusIDs); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// backfillMarker records that the one-shot top-up below has run.
+const backfillMarker = "default_views_backfilled"
+
+// backfillDefaultViews tops up scopes that predate a default view: projects
+// created when there were only two get "Tasks", and the cross-project scope -
+// whose views were inherited wholesale from the pre-projects database, so it
+// never had an everything view at all - gets "All".
+//
+// It runs once and says so in meta rather than reconciling on every startup. A
+// default view someone deliberately deleted has to stay deleted; a top-up that
+// ran every time would resurrect it on the next restart.
+func (s *Store) backfillDefaultViews(ctx context.Context, projects []Project) error {
+	var done string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, backfillMarker).Scan(&done)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	if err := s.addMissingDefaultViews(ctx, AllScope, nil); err != nil {
+		return fmt.Errorf("backfill cross-project views: %w", err)
+	}
+	for i := range projects {
+		if err := s.addMissingDefaultViews(ctx, projects[i].Slug, &projects[i].ID); err != nil {
+			return fmt.Errorf("backfill views for %s: %w", projects[i].Slug, err)
+		}
+	}
+
+	_, err = s.db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`, backfillMarker, now())
+	return err
+}
+
+func (s *Store) addMissingDefaultViews(ctx context.Context, scope string, projectID *int64) error {
+	existing, err := s.ListBoards(ctx, scope)
+	if err != nil {
+		return err
+	}
+	// Nothing at all is the blank-scope case seed() has already healed above,
+	// and healing it a second time would only raise duplicate-slug conflicts.
+	if len(existing) == 0 {
+		return nil
+	}
+	have := make(map[string]bool, len(existing))
+	for _, b := range existing {
+		have[b.Slug] = true
+	}
+	statusIDs, err := s.allStatusIDs(ctx)
+	if err != nil {
+		return err
+	}
+
+	where, args := scopePredicate(projectID)
+	for i, d := range defaultViews {
+		if have[d.slug] {
+			continue
+		}
+		// Open the slot this view would have occupied had it always been seeded,
+		// rather than appending: nothing in the API or the UI can reorder views
+		// afterwards, so wherever it lands is where it stays.
+		pos := i + 1
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE board SET position = position + 1 WHERE `+where+` AND position >= ?`,
+			append(append([]any{}, args...), pos)...); err != nil {
+			return err
+		}
+		if err := s.createDefaultView(ctx, projectID, pos, d, statusIDs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// scopePredicate selects one scope's boards. project_id NULL is the
+// cross-project scope, so it cannot be matched with '='.
+func scopePredicate(projectID *int64) (string, []any) {
+	if projectID == nil {
+		return "project_id IS NULL", nil
+	}
+	return "project_id = ?", []any{*projectID}
+}
+
+func (s *Store) createDefaultView(
+	ctx context.Context, projectID *int64, pos int, d defaultView, statusIDs []int64,
+) error {
+	created, err := s.CreateBoard(ctx, Board{
+		Name: d.name, Slug: d.slug, FilterType: d.ftype,
+		Position: pos, ProjectID: projectID,
+	})
+	if err != nil {
+		return err
+	}
+	// A view with no columns renders as an empty board, so every seeded one
+	// starts showing every status.
+	return s.SetBoardColumns(ctx, created.ID, statusIDs)
+}
+
+func (s *Store) allStatusIDs(ctx context.Context) ([]int64, error) {
+	statuses, err := s.ListStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(statuses))
+	for _, st := range statuses {
+		ids = append(ids, st.ID)
+	}
+	return ids, nil
 }
 
 // ---- statuses ----
